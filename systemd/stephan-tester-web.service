@@ -1,0 +1,20 @@
+[Unit]
+Description=Stephan Van Vuuren's Network Tester - Web Cockpit, Telemetry Engine & Scheduler (Port 80)
+After=network-online.target trex-server.service
+Wants=network-online.target trex-server.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/stephan-network-tester/backend
+Environment="PYTHONPATH=/opt/stephan-network-tester:/opt/stephan-network-tester/backend:/opt/trex/automation/trex_control_plane/interactive"
+ExecStartPre=/opt/stephan-network-tester/scripts/update_lcd_and_banner.sh
+ExecStart=/opt/stephan-network-tester/venv/bin/uvicorn main:app --host 0.0.0.0 --port 80 --workers 1 --ws-ping-interval 10 --ws-ping-timeout 20
+Restart=always
+RestartSec=2
+LimitNOFILE=1048576
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

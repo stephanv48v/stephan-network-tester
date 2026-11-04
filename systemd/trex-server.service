@@ -1,0 +1,20 @@
+[Unit]
+Description=Cisco TRex High-Speed Traffic Generator Server (Stephan Van Vuuren's Network Tester)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/trex
+ExecStart=/opt/stephan-network-tester/scripts/start_trex.sh
+Restart=always
+RestartSec=3
+LimitMEMLOCK=infinity
+LimitNOFILE=1048576
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+Alias=trex-engine.service
