@@ -688,6 +688,8 @@ class TRexEngineManager:
                             normalized_mix=norm_mix,
                             src_ip_base=req.get("src_ip_start", "16.0.0.1"),
                             dst_ip_base=req.get("dst_ip_start", "48.0.0.1"),
+                            # Hold connections open like real phones (target open TCP connections), if asked
+                            hold_concurrency=int(req["hold_concurrency"]) if req.get("hold_concurrency") else None,
                         )
                         self.astf_meta = meta
                         self._astf_calib_bps = self.base_target_bps
@@ -804,6 +806,8 @@ class TRexEngineManager:
             "astf_meta": self.astf_meta,
             "topology_snapshot": hw_snap.get("topology_assessment"),
             "internet_options": req.get("internet_options", {}),
+            "hold_concurrency": int(req["hold_concurrency"]) if req.get("hold_concurrency") else None,
+            "event": req.get("event") if isinstance(req.get("event"), dict) else None,
             "dut_name": req.get("dut_name", "UniFi Enterprise Fortress Gateway (EFG)"),
             "client_name": req.get("client_name", "Enterprise Network Performance Validation"),
             "operator_name": req.get("operator_name", "Stephan Van Vuuren"),

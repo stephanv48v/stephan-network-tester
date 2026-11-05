@@ -15,7 +15,7 @@ Key Engineering Properties:
     state transitions; does not execute proprietary commercial encryption/authentication protocols.
 """
 import ipaddress
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Upper limit for simulated users (one emulated client IP per user).
 # 100,000 users from 16.0.0.1 ends at 16.1.134.160 — well clear of the 48.x server pool.
@@ -58,6 +58,7 @@ def build_astf_enterprise_profile(
     normalized_mix: Dict[str, float],
     src_ip_base: str = "16.0.0.1",
     dst_ip_base: str = "48.0.0.1",
+    hold_concurrency: Optional[int] = None,
 ) -> Tuple[Any, Dict[str, Any]]:
     """
     Construct a multi-template Cisco TRex ASTFProfile representing `simulated_users`
@@ -86,6 +87,29 @@ def build_astf_enterprise_profile(
 
     templates: List[Any] = []
     template_summary: List[Dict[str, Any]] = []
+
+    # Real phones keep several connections open (apps, push, messaging, video). Without holding,
+    # each simulated session closes within ~1 s and concurrency stays tiny. When hold_concurrency
+    # is given, every TCP session idles open (keep-alive) after its exchange so that
+    #   open connections ~= sum(cps_i) x hold_sec ~= hold_concurrency
+    TCP_KEYS = ("web_browsing", "social_browsing", "video_streaming", "m365_productivity",
+                "messaging_chat", "cloud_files", "bulk_downloads", "backups_storage")
+
+    def _tcp_cps(key: str, weight_pct: float) -> float:
+        share_bps = max(50_000.0, target_bps * (weight_pct / 100.0))
+        return max(0.5, min(25000.0, share_bps / (TEMPLATE_BYTES_PER_SESSION.get(key, 64_000) * 8.0)))
+
+    total_tcp_cps = sum(_tcp_cps(k, float(normalized_mix.get(k, 0.0))) for k in TCP_KEYS if float(normalized_mix.get(k, 0.0)) > 0.05)
+    hold_sec = 0.0
+    if hold_concurrency and total_tcp_cps > 0:
+        hold_sec = max(0.0, min(120.0, float(hold_concurrency) / total_tcp_cps))
+    hold_us = int(hold_sec * 1_000_000)
+
+    def hold(pc: Any, ps: Any) -> None:
+        """Keep the connection open (idle) after its exchange, like a real app's keep-alive."""
+        if hold_us > 0:
+            pc.delay(hold_us)          # client idles, then closes (FIN)
+            ps.wait_for_peer_close()   # server waits for the client to close instead of closing first
 
     def add_tcp_template(key: str, port: int, prog_c: Any, prog_s: Any, weight_pct: float) -> None:
         if weight_pct <= 0.05:
@@ -123,6 +147,7 @@ def build_astf_enterprise_profile(
         resp2 = b"HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\n\r\n" + (b"J" * 44000)
         pc.send(req1); pc.recv(len(resp1), clear=True); pc.delay(120000); pc.send(req2); pc.recv(len(resp2), clear=True)
         ps.recv(len(req1), clear=True); ps.send(resp1); ps.recv(len(req2), clear=True); ps.send(resp2)
+        hold(pc, ps)
         add_tcp_template("web_browsing", 443, pc, ps, w_web)
 
     # 2. Social Media Browsing & Media Bursts (Port 8443)
@@ -135,6 +160,7 @@ def build_astf_enterprise_profile(
         resp2 = b"HTTP/1.1 200 OK\r\n\r\n" + (b"V" * 128000)
         pc.send(req1); pc.recv(len(resp1), clear=True); pc.delay(220000); pc.send(req2); pc.recv(len(resp2), clear=True)
         ps.recv(len(req1), clear=True); ps.send(resp1); ps.recv(len(req2), clear=True); ps.send(resp2)
+        hold(pc, ps)
         add_tcp_template("social_browsing", 8443, pc, ps, w_soc)
 
     # 3. Video Streaming & Sustained ABR Chunk Downloads (Port 8080)
@@ -148,6 +174,7 @@ def build_astf_enterprise_profile(
             if idx < 3:
                 pc.delay(250000)
             ps.recv(len(seg_req), clear=True); ps.send(seg_rsp)
+        hold(pc, ps)
         add_tcp_template("video_streaming", 8080, pc, ps, w_vid)
 
     # 4. Microsoft 365-style Application Activity (Port 9443)
@@ -160,6 +187,7 @@ def build_astf_enterprise_profile(
         dn2 = b"HTTP/1.1 200 OK\r\n\r\n" + (b"I" * 8192)
         pc.send(up1); pc.recv(len(dn1), clear=True); pc.delay(180000); pc.send(up2); pc.recv(len(dn2), clear=True)
         ps.recv(len(up1), clear=True); ps.send(dn1); ps.recv(len(up2), clear=True); ps.send(dn2)
+        hold(pc, ps)
         add_tcp_template("m365_productivity", 9443, pc, ps, w_m365)
 
     # 5. Teams-style Voice/Video Bidirectional UDP (Port 3478)
@@ -181,6 +209,7 @@ def build_astf_enterprise_profile(
         r2 = b"MEDIA_DELIVERED:" + (b"d" * 9600)
         pc.send(m1); pc.recv(len(r1), clear=True); pc.delay(300000); pc.send(m2); pc.recv(len(r2), clear=True)
         ps.recv(len(m1), clear=True); ps.send(r1); ps.recv(len(m2), clear=True); ps.send(r2)
+        hold(pc, ps)
         add_tcp_template("messaging_chat", 5222, pc, ps, w_msg)
 
     # 7. Cloud File Uploads & Downloads (Port 8082 Upload + Port 8081 Download)
@@ -191,6 +220,7 @@ def build_astf_enterprise_profile(
         dn_payload = b"HTTP/1.1 200 OK\r\n\r\n" + (b"F" * 131072)
         pc.send(up_payload); pc.recv(len(dn_payload), clear=True)
         ps.recv(len(up_payload), clear=True); ps.send(dn_payload)
+        hold(pc, ps)
         add_tcp_template("cloud_files", 8082, pc, ps, w_files)
 
     # 8. Sustained Bulk Downloads (Port 8081)
@@ -201,6 +231,7 @@ def build_astf_enterprise_profile(
         rsp = b"HTTP/1.1 200 OK\r\nContent-Length: 524288\r\n\r\n" + (b"B" * 524288)
         pc.send(req); pc.recv(len(rsp), clear=True)
         ps.recv(len(req), clear=True); ps.send(rsp)
+        hold(pc, ps)
         add_tcp_template("bulk_downloads", 8081, pc, ps, w_bulk)
 
     # 9. DNS Query/Response Transactions (UDP Port 53)
@@ -237,6 +268,7 @@ def build_astf_enterprise_profile(
         ack = b"SYNC_BLOCK_COMMITTED_OK\r\n"
         pc.send(blk); pc.recv(len(ack), clear=True); pc.delay(50000); pc.send(blk); pc.recv(len(ack), clear=True)
         ps.recv(len(blk), clear=True); ps.send(ack); ps.recv(len(blk), clear=True); ps.send(ack)
+        hold(pc, ps)
         add_tcp_template("backups_storage", 873, pc, ps, w_bak)
 
     # Fallback if somehow empty
@@ -244,6 +276,7 @@ def build_astf_enterprise_profile(
         pc, ps = ASTFProgram(), ASTFProgram()
         pc.send(b"GET / HTTP/1.1\r\n\r\n"); pc.recv(16384)
         ps.recv(18); ps.send(b"HTTP/1.1 200 OK\r\n\r\n" + (b"X" * 16365))
+        hold(pc, ps)
         add_tcp_template("web_browsing", 443, pc, ps, 100.0)
 
     profile = ASTFProfile(default_ip_gen=ip_gen, templates=templates)
@@ -253,6 +286,9 @@ def build_astf_enterprise_profile(
         "emulated_client_ip_count": ip_count,
         "emulated_server_ip_range": f"{s_start} - {s_end}",
         "active_template_count": len(templates),
+        "hold_sec": round(hold_sec, 2),
+        "target_open_connections": int(hold_concurrency) if hold_concurrency else None,
+        "expected_open_tcp_connections": int(total_tcp_cps * hold_sec) if hold_sec else None,
         "templates": template_summary,
     }
     return profile, meta

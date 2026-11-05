@@ -86,12 +86,37 @@ class CapacityFinder:
                     v = default
                 return max(lo, min(hi, v))
 
-            start_users = int(num("start_users", 10000, 1, MAX_SIMULATED_USERS))
-            max_users = int(num("max_users", MAX_SIMULATED_USERS, start_users, MAX_SIMULATED_USERS))
-            step_users = int(num("step_users", 10000, 1, MAX_SIMULATED_USERS))
-            plan: List[int] = list(range(start_users, max_users + 1, step_users))
-            if not plan or plan[-1] != max_users:
-                plan.append(max_users)
+            # Event mode: describe the event, steps are % of the expected crowd
+            ev_in = cfg.get("event") if isinstance(cfg.get("event"), dict) else None
+            event = None
+            if ev_in:
+                def evn(key: str, default: float, lo: float, hi: float) -> float:
+                    try:
+                        return max(lo, min(hi, float(ev_in.get(key, default))))
+                    except (TypeError, ValueError):
+                        return default
+                event = {
+                    "attendees": int(evn("attendees", 10000, 100, MAX_SIMULATED_USERS)),
+                    "online_pct": evn("online_pct", 70, 1, 100),
+                    "mbps_per_user": evn("mbps_per_user", 1.0, 0.01, 100.0),
+                    "conns_per_user": evn("conns_per_user", 8, 1, 200),
+                }
+                pcts = ev_in.get("steps_pct") or [25, 50, 75, 100, 125, 150, 175, 200]
+                pcts = sorted({max(1, min(1000, int(p))) for p in pcts})
+                event["steps_pct"] = pcts
+                plan = sorted({max(1, min(MAX_SIMULATED_USERS, int(round(event["attendees"] * p / 100.0)))) for p in pcts})
+                start_users, max_users = plan[0], plan[-1]
+                step_users = plan[1] - plan[0] if len(plan) > 1 else plan[0]
+                # Per attendee: bandwidth and open connections averaged over who is online
+                cfg = {**cfg, "per_user_kbps": event["online_pct"] / 100.0 * event["mbps_per_user"] * 1000.0,
+                       "profile_id": cfg.get("profile_id") or "event_crowd"}
+            else:
+                start_users = int(num("start_users", 10000, 1, MAX_SIMULATED_USERS))
+                max_users = int(num("max_users", MAX_SIMULATED_USERS, start_users, MAX_SIMULATED_USERS))
+                step_users = int(num("step_users", 10000, 1, MAX_SIMULATED_USERS))
+                plan: List[int] = list(range(start_users, max_users + 1, step_users))
+                if not plan or plan[-1] != max_users:
+                    plan.append(max_users)
             if len(plan) > 40:
                 return {"status": "error", "error": f"That is {len(plan)} steps — use a bigger step size (max 40 steps)."}
 
@@ -110,6 +135,9 @@ class CapacityFinder:
                 "refine_steps": int(num("refine_steps", 2, 0, 5)),
                 "profile_id": str(cfg.get("profile_id") or "imix"),
                 "label": str(cfg.get("label") or "Breaking-point test"),
+                "event": event,
+                # Open TCP connections to hold per simulated user (event mode: online share x connections per phone)
+                "conns_per_user": (event["online_pct"] / 100.0 * event["conns_per_user"]) if event else None,
             }
             path = {}
             try:
@@ -170,7 +198,10 @@ class CapacityFinder:
         """Run one step. Returns 'ok', 'bad', 'cancel' or 'error'."""
         s = self.state["settings"]
         target = self._target_gbps(users)
-        label = f"{users:,} users" + (" (narrowing down)" if refine else "")
+        ev = s.get("event")
+        pct = f" ({users / ev['attendees'] * 100:.0f}% of event)" if ev else ""
+        label = f"{users:,} users{pct}" + (" (narrowing down)" if refine else "")
+        hold = int(users * s["conns_per_user"]) if s.get("conns_per_user") else None
         self._set(current_step=idx, current_users=users, message=f"Step {idx}: {label} @ {target:.2f} Gbps")
         ramp = 15 if users <= 20000 else 30
         res = engine.start_test({
@@ -184,6 +215,8 @@ class CapacityFinder:
             "ramp_up_sec": ramp,
             "steady_sec": s["step_sec"],
             "ramp_down_sec": 5,
+            "hold_concurrency": hold,
+            "event": ev,
         })
         run_id = res.get("run_id")
         if not run_id:
@@ -327,10 +360,14 @@ class CapacityFinder:
     def _record(self, idx: int, users: int, run_id: Any, summary: Optional[Dict[str, Any]], ok: bool, reason: str,
                 target_gbps: float = 0.0, refine: bool = False, causes: Optional[List[str]] = None) -> None:
         summary = summary or {}
+        s = self.state.get("settings") or {}
+        ev = s.get("event")
         with self._lock:
             self.state["steps"].append({
                 "step": idx,
                 "users": users,
+                "pct_of_event": round(users / ev["attendees"] * 100.0, 1) if ev else None,
+                "target_open_conns": int(users * s["conns_per_user"]) if s.get("conns_per_user") else None,
                 "run_id": run_id,
                 "ok": ok,
                 "reason": reason,
