@@ -373,6 +373,8 @@ async def websocket_telemetry(ws: WebSocket):
                 if cmd.get("action") == "set_rate":
                     await asyncio.to_thread(engine.update_rate, float(cmd.get("rate_pct", 50.0)))
                 elif cmd.get("action") == "stop":
+                    if capacity_finder.running:
+                        await asyncio.to_thread(capacity_finder.stop, engine)
                     await asyncio.to_thread(engine.stop_test, "emergency_stopped")
             except Exception:
                 pass
@@ -457,6 +459,11 @@ async def start_test(payload: Dict[str, Any]):
 @app.post("/api/test/stop")
 async def stop_test(payload: Optional[Dict[str, Any]] = None):
     reason = (payload or {}).get("status") or "completed"
+    # A Stop must stop everything: if the breaking-point finder is driving the engine, cancel it too,
+    # otherwise it treats the stopped step as finished and immediately starts the next (bigger) step.
+    if capacity_finder.running:
+        await asyncio.to_thread(capacity_finder.stop, engine)
+        return {"status": "stopped", "stopped_breaking_point_finder": True}
     return await asyncio.to_thread(engine.stop_test, str(reason))
 
 

@@ -927,3 +927,19 @@ input[type="range"] {
 .sidebar-brand.codeblue-brand { padding: 20px 20px 16px; }
 
 .codeblue-brand .brand-text-sub { color: #94A3B8; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 6px; }
+
+/* Home mini charts */
+.home-mini-charts { margin-bottom: 16px; gap: 14px; }
+.home-mini-charts .card-header { margin-bottom: 4px; }
+.mini-chart { width: 100%; height: 190px; }
+@media (max-width: 1300px) { .home-mini-charts { grid-template-columns: 1fr; } }
+
+/* Run detail charts */
+.run-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+.run-charts .rc { border: 1px solid var(--border-color); border-radius: var(--radius-ctrl); padding: 8px 8px 2px; background: #FFF; }
+.run-charts .rc-title { font-size: 12px; font-weight: 700; color: var(--text-main); padding: 0 4px; }
+.run-charts .rc-chart { width: 100%; height: 190px; }
+@media (max-width: 900px) { .run-charts { grid-template-columns: 1fr; } }
+
+.modal-box.wide { max-width: 1100px; }
+

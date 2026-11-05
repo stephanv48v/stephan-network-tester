@@ -149,6 +149,9 @@ class CapacityFinder:
                 else:
                     engine.stop_test("interrupted")
                 if self._cancel.is_set():
+                    # Stop may have landed while this step was starting: make sure it isn't left running
+                    if engine.running and engine.active_run_id == run_id:
+                        engine.stop_test("stopped_by_operator")
                     outcome = "cancelled"
                     break
 

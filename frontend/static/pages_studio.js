@@ -1160,6 +1160,13 @@ const StudioPages = {
     }).join('');
 
     el.innerHTML = `
+      <div class="card" style="margin-bottom:14px;">
+        <div class="card-header">
+          <div class="card-title">Results over time</div>
+          <span class="card-subtitle">Bars: average received throughput (colour = test type) · line: average latency · click a bar to open the test</span>
+        </div>
+        <div id="histChart" style="width:100%;height:240px;"></div>
+      </div>
       <div class="card">
         <div class="card-header">
           <div class="card-title">Recorded Test Runs (${App.runs.length} Stored in SQLite)</div>
@@ -1175,6 +1182,7 @@ const StudioPages = {
         </div>
       </div>
     `;
+    this.renderHistoryChart();
   },
 
   async rerunTest(id) {
@@ -1213,10 +1221,151 @@ const StudioPages = {
     }
   },
 
+  renderHistoryChart() {
+    const el = document.getElementById('histChart');
+    if (!el || !window.echarts) return;
+    if (this.histChart) this.histChart.dispose();
+    const runs = (App.runs || []).filter((r) => (r.summary || {}).sample_count).slice(0, 60).reverse();
+    if (!runs.length) { el.innerHTML = '<div style="color:var(--text-secondary);font-size:12.5px;padding:20px;">No finished tests yet.</div>'; return; }
+    const ch = echarts.init(el);
+    this.histChart = ch;
+    const maxBps = Math.max(...runs.map((r) => Number(r.summary.avg_rx_bps || 0)));
+    const k = maxBps >= 1e9 ? 1e9 : 1e6;
+    const unit = maxBps >= 1e9 ? 'Gbps' : 'Mbps';
+    const colors = { trex_astf: '#1769D2', trex_stl: '#0EA5E9', internet_wan: '#10B981', hybrid: '#7C3AED' };
+    const names = { trex_astf: 'Stateful (users)', trex_stl: 'Stateless', internet_wan: 'Internet', hybrid: 'Hybrid' };
+    const axisLabel = { color: '#64748B', fontSize: 10.5 };
+    ch.setOption({
+      animation: false,
+      grid: { top: 34, right: 54, bottom: 28, left: 56 },
+      legend: { top: 0, left: 'center', data: Object.keys(names).filter((e) => runs.some((r) => r.traffic_engine === e)).map((e) => names[e]).concat(['Avg latency (ms)']), textStyle: { color: '#475569', fontSize: 11 } },
+      tooltip: {
+        trigger: 'axis', confine: true,
+        formatter: (ps) => {
+          const r = runs[ps[0].dataIndex];
+          const s = r.summary || {};
+          return `<strong>#${r.id} ${App.esc(r.name)}</strong><br/>${new Date(r.started_at * 1000).toLocaleString()}<br/>Received ${App.fmtBps(s.avg_rx_bps)} · loss ${Number(s.drop_pct || 0).toFixed(3)}%<br/>Latency ${(Number(s.lat_avg_us || 0) / 1000).toFixed(2)} ms · ${Number(r.simulated_users || 0).toLocaleString()} users`;
+        },
+      },
+      xAxis: { type: 'category', data: runs.map((r) => `#${r.id}`), axisLabel, axisLine: { lineStyle: { color: '#DFE5ED' } } },
+      yAxis: [
+        { type: 'value', name: unit, min: 0, axisLabel, nameTextStyle: axisLabel, splitLine: { lineStyle: { color: '#EEF2F6' } } },
+        { type: 'value', name: 'ms', min: 0, axisLabel, nameTextStyle: axisLabel, splitLine: { show: false } },
+      ],
+      series: [
+        ...Object.keys(names).filter((e) => runs.some((r) => r.traffic_engine === e)).map((e) => ({
+          name: names[e], type: 'bar', stack: 'rx', barMaxWidth: 26, itemStyle: { color: colors[e], borderRadius: [3, 3, 0, 0] },
+          data: runs.map((r) => (r.traffic_engine === e ? +(Number(r.summary.avg_rx_bps || 0) / k).toFixed(2) : null)),
+        })),
+        { name: 'Avg latency (ms)', type: 'line', yAxisIndex: 1, symbolSize: 5, connectNulls: true, lineStyle: { color: '#D97706', width: 1.6 }, itemStyle: { color: '#D97706' },
+          data: runs.map((r) => (r.summary.lat_avg_us ? +(Number(r.summary.lat_avg_us) / 1000).toFixed(2) : null)) },
+      ],
+    });
+    ch.on('click', (p) => { const r = runs[p.dataIndex]; if (r) this.showRunDetailModal(r.id); });
+  },
+
   async deleteHistoryRun(id) {
     if (!confirm(`Delete Test Run #${id} permanently?`)) return;
     await App.api(`/api/runs/${id}`, { method: 'DELETE' });
     this.renderTestHistory();
+  },
+
+  // ---- Charts for one recorded run (used by the run detail window) ----------
+  _runChartDefs(run) {
+    const ss = run.samples || [];
+    const x = ss.map((s) => `${s.elapsed_sec}s`);
+    const n = (v) => (v === null || v === undefined ? null : Number(v));
+    const maxBps = Math.max(0, ...ss.map((s) => Math.max(n(s.tx_bps) || 0, n(s.rx_bps) || 0)));
+    const gb = maxBps >= 1e9;
+    const bk = gb ? 1e9 : 1e6;
+    const maxLat = Math.max(0, ...ss.map((s) => n(s.p99_lat_us) || n(s.lat_avg_us) || 0));
+    const ms = maxLat >= 2000;
+    const lk = ms ? 1000 : 1;
+
+    // Shade ramp-up / steady / ramp-down / step phases
+    const bands = [];
+    let start = 0;
+    for (let i = 1; i <= ss.length; i++) {
+      if (i === ss.length || ss[i].phase_name !== ss[start].phase_name) {
+        const ph = String(ss[start].phase_name || '');
+        if (ph && ph !== 'steady' && ph !== 'idle') {
+          bands.push([{ name: ph.replace(/_/g, ' '), xAxis: x[start], itemStyle: { color: ph.startsWith('ramp') ? 'rgba(148,163,184,0.12)' : 'rgba(23,105,210,0.05)' } }, { xAxis: x[i - 1] }]);
+        }
+        start = i;
+      }
+    }
+    const markArea = bands.length ? { silent: true, label: { color: '#94A3B8', fontSize: 10, position: 'insideTop' }, data: bands } : undefined;
+    const line = (name, data, color, extra = {}) => ({ name, type: 'line', smooth: true, showSymbol: false, connectNulls: true, lineStyle: { width: 1.8, color }, itemStyle: { color }, data, ...extra });
+    const hasFlows = ss.some((s) => n(s.active_flows) > 0);
+    const hasMos = ss.some((s) => n(s.mos_score) > 0);
+
+    return [
+      {
+        title: `Throughput (${gb ? 'Gbps' : 'Mbps'})`,
+        y: [{ name: gb ? 'Gbps' : 'Mbps' }],
+        series: [
+          line('Sent', ss.map((s) => +((n(s.tx_bps) || 0) / bk).toFixed(3)), '#1769D2', { areaStyle: { color: 'rgba(23,105,210,0.10)' }, markArea }),
+          line('Received', ss.map((s) => +((n(s.rx_bps) || 0) / bk).toFixed(3)), '#10B981'),
+        ],
+      },
+      {
+        title: `Latency & jitter (${ms ? 'ms' : 'μs'})`,
+        y: [{ name: ms ? 'ms' : 'μs' }],
+        series: [
+          line('Avg', ss.map((s) => (n(s.lat_avg_us) ? +(n(s.lat_avg_us) / lk).toFixed(2) : null)), '#1769D2', { markArea }),
+          line('P99', ss.map((s) => (n(s.p99_lat_us) ? +(n(s.p99_lat_us) / lk).toFixed(2) : null)), '#D97706'),
+          line('Jitter', ss.map((s) => (n(s.jitter_us) ? +(n(s.jitter_us) / lk).toFixed(2) : null)), '#0D9488', { lineStyle: { width: 1.5, color: '#0D9488', type: 'dashed' } }),
+        ],
+      },
+      hasFlows
+        ? {
+            title: 'Connections',
+            y: [{ name: 'flows' }, { name: 'new/s' }],
+            series: [
+              line('Active flows', ss.map((s) => n(s.active_flows) || 0), '#1769D2', { areaStyle: { color: 'rgba(23,105,210,0.08)' }, markArea }),
+              line('TCP sessions', ss.map((s) => n(s.established_sessions) || 0), '#15803D'),
+              line('New/s', ss.map((s) => +(n(s.cps) || 0).toFixed(1)), '#D97706', { yAxisIndex: 1, lineStyle: { width: 1.5, color: '#D97706', type: 'dashed' } }),
+            ],
+          }
+        : {
+            title: 'Packet rate (kpps)',
+            y: [{ name: 'kpps' }],
+            series: [
+              line('Sent', ss.map((s) => +((n(s.tx_pps) || 0) / 1e3).toFixed(1)), '#1769D2', { areaStyle: { color: 'rgba(23,105,210,0.08)' }, markArea }),
+              line('Received', ss.map((s) => +((n(s.rx_pps) || 0) / 1e3).toFixed(1)), '#10B981'),
+            ],
+          },
+      {
+        title: hasMos ? 'Packet loss & call quality (MOS estimate)' : 'Packet loss',
+        y: hasMos ? [{ name: 'loss %' }, { name: 'MOS', min: 1, max: 5 }] : [{ name: 'loss %' }],
+        series: [
+          line('Loss %', ss.map((s) => +(n(s.drop_pct) || 0).toFixed(4)), '#DC2626', { areaStyle: { color: 'rgba(220,38,38,0.08)' }, markArea }),
+          ...(hasMos ? [line('MOS', ss.map((s) => (n(s.mos_score) ? +n(s.mos_score).toFixed(2) : null)), '#7C3AED', { yAxisIndex: 1 })] : []),
+        ],
+      },
+    ].map((d) => ({ ...d, x }));
+  },
+
+  _renderRunCharts(run, idPrefix) {
+    (this._modalCharts || []).forEach((c) => c.dispose());
+    this._modalCharts = [];
+    if (!window.echarts || !(run.samples || []).length) return;
+    const axisLabel = { color: '#64748B', fontSize: 10 };
+    this._runChartDefs(run).forEach((d, i) => {
+      const el = document.getElementById(`${idPrefix}${i}`);
+      if (!el) return;
+      const ch = echarts.init(el);
+      ch.setOption({
+        animation: false,
+        grid: { top: 26, right: d.y.length > 1 ? 44 : 14, bottom: 22, left: 48 },
+        tooltip: { trigger: 'axis', confine: true },
+        legend: { top: 0, right: 0, itemWidth: 12, itemHeight: 7, textStyle: { color: '#475569', fontSize: 10.5 } },
+        xAxis: { type: 'category', boundaryGap: false, data: d.x, axisLabel: { ...axisLabel, hideOverlap: true }, axisLine: { lineStyle: { color: '#DFE5ED' } } },
+        yAxis: d.y.map((y, j) => ({ type: 'value', min: 0, splitLine: { show: j === 0, lineStyle: { color: '#EEF2F6' } }, nameTextStyle: { color: '#64748B', fontSize: 10 }, axisLabel, ...y })),
+        series: d.series,
+      });
+      this._modalCharts.push(ch);
+    });
   },
 
   async showRunDetailModal(runId) {
@@ -1224,7 +1373,8 @@ const StudioPages = {
       const r = await App.api(`/api/runs/${runId}`);
       const s = r.summary || {};
       const html = `
-        <div class="grid-3" style="gap:10px;margin-bottom:14px;">
+        <div class="grid-4" style="gap:10px;margin-bottom:14px;">
+          <div class="card"><div class="card-subtitle">Packet loss</div><div style="font-size:17px;font-weight:800;">${Number(s.drop_pct || 0).toFixed(3)}%</div><div class="kpi-foot">${Number(s.total_dropped_packets || 0).toLocaleString()} packets dropped</div></div>
           <div class="card"><div class="card-subtitle">Avg / Peak RX</div><div style="font-size:17px;font-weight:800;">${App.fmtBps(s.avg_rx_bps || 0)}</div><div class="kpi-foot">Peak: ${App.fmtBps(s.max_rx_bps || 0)}</div></div>
           <div class="card"><div class="card-subtitle">Avg / P99 Latency</div><div style="font-size:17px;font-weight:800;">${Number(s.lat_avg_us || 0).toFixed(2)} μs</div><div class="kpi-foot">P99: ${Number(s.p99_lat_us || 0).toFixed(2)} μs</div></div>
           <div class="card"><div class="card-subtitle">Flows / TCP Sessions</div><div style="font-size:17px;font-weight:800;">${Number(s.peak_active_flows || 0).toLocaleString()}</div><div class="kpi-foot">Est TCP: ${Number(s.peak_established_sessions || 0).toLocaleString()}</div></div>
@@ -1233,13 +1383,16 @@ const StudioPages = {
           <strong>Source:</strong> ${s.telemetry_source || r.traffic_engine} &bull;
           <strong>Samples:</strong> ${(r.samples || []).length}s &bull;
           <strong>UniFi Polls:</strong> ${(r.unifi_samples || []).length} &bull;
-          <strong>Packet Loss:</strong> ${Number(s.drop_pct || 0).toFixed(4)}%
+          <strong>Users:</strong> ${Number(r.simulated_users || 0).toLocaleString()}
+        </div>
+        <div class="run-charts">
+          ${[0, 1, 2, 3].map((i) => `<div class="rc"><div class="rc-title" id="rcTitle${i}"></div><div class="rc-chart" id="rcChart${i}"></div></div>`).join('')}
         </div>
         <div style="display:flex;gap:8px;">
-          <a class="btn btn-primary btn-sm" href="/api/runs/${r.id}/export/pdf?report_type=technical" target="_blank">Download 9-Page Technical PDF</a>
-          <a class="btn btn-outline btn-sm" href="/api/runs/${r.id}/export/pdf?report_type=executive" target="_blank">Download 3-Page Executive PDF</a>
-          <a class="btn btn-outline btn-sm" href="/api/runs/${r.id}/export/csv">Download CSV</a>
-          <a class="btn btn-outline btn-sm" href="/api/runs/${r.id}/export/json">Download JSON</a>
+          <a class="btn btn-primary btn-sm" href="/api/runs/${r.id}/export/pdf?report_type=technical" target="_blank">Technical PDF</a>
+          <a class="btn btn-outline btn-sm" href="/api/runs/${r.id}/export/pdf?report_type=executive" target="_blank">Executive PDF</a>
+          <a class="btn btn-outline btn-sm" href="/api/runs/${r.id}/export/csv">CSV</a>
+          <a class="btn btn-outline btn-sm" href="/api/runs/${r.id}/export/json">JSON</a>
         </div>
         <div style="display:flex;gap:8px;margin-top:10px;">
           ${r.test_mode !== 'rfc2544_sweep' ? `<button class="btn btn-outline btn-sm" onclick="StudioPages.rerunTest(${r.id})">&#8635; Re-run this test</button>` : ''}
@@ -1247,6 +1400,13 @@ const StudioPages = {
         </div>
       `;
       App.openModal(`Run #${r.id} — ${r.name}`, html);
+      document.querySelector('#appModalBackdrop .modal-box')?.classList.add('wide');
+      if ((r.samples || []).length) {
+        this._runChartDefs(r).forEach((d, i) => { const el = document.getElementById(`rcTitle${i}`); if (el) el.textContent = d.title; });
+        setTimeout(() => this._renderRunCharts(r, 'rcChart'), 30);
+      } else {
+        document.querySelector('.run-charts')?.remove();
+      }
     } catch (e) {
       App.toast(e.message, 'error');
     }
@@ -1392,8 +1552,8 @@ const StudioPages = {
             <button class="btn btn-outline btn-block" onclick="StudioPages.refreshReportPreview()">&#128065; Refresh Live PDF Preview</button>
             <button class="btn btn-primary btn-block" onclick="StudioPages.downloadSelectedReport('pdf')">&#11015; Download Styled PDF Report</button>
             <div class="grid-2" style="gap:8px;">
-              <button class="btn btn-outline" onclick="StudioPages.downloadSelectedReport('csv')">Download CSV</button>
-              <button class="btn btn-outline" onclick="StudioPages.downloadSelectedReport('json')">Download JSON</button>
+              <button class="btn btn-outline" onclick="StudioPages.downloadSelectedReport('csv')">CSV</button>
+              <button class="btn btn-outline" onclick="StudioPages.downloadSelectedReport('json')">JSON</button>
             </div>
           </div>
         </div>

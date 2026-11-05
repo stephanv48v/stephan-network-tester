@@ -126,6 +126,8 @@ const App = {
     tcpRexmt: [],
     unifiCpu: [],
     r640Cpu: [],
+    cpuTemp: [],
+    mos: [],
   },
 
   async init() {
@@ -231,7 +233,7 @@ const App = {
     if (route === 'dashboard') {
       this.refreshRunsSilent();
       setTimeout(() => {
-        if (this.charts.dashTp) this.charts.dashTp.resize();
+        ['dashTp', 'dashLat', 'dashFlow', 'dashLoad', 'dashRecent'].forEach((k) => this.charts[k] && this.charts[k].resize());
       }, 60);
     } else if (route === 'live-monitoring') {
       this.ensureLiveMonChart();
@@ -272,6 +274,7 @@ const App = {
   },
 
   openModal(title, html) {
+    document.querySelector('#appModalBackdrop .modal-box')?.classList.remove('wide');
     document.getElementById('appModalTitle').textContent = title;
     document.getElementById('appModalBody').innerHTML = html;
     document.getElementById('appModalBackdrop').classList.add('open');
@@ -440,7 +443,10 @@ const App = {
         h.cps.push(Number((f.cps || 0).toFixed(1)));
         h.drops.push(Number(f.dropped_packets || 0));
         h.tcpRexmt.push(Number(f.tcp_retransmits || 0));
-        h.unifiCpu.push(f.unifi_gw_cpu !== null && f.unifi_gw_cpu !== undefined ? Number(f.unifi_gw_cpu) : null);
+        const gwCpu = f.unifi_gw_cpu ?? (f.unifi_connected ? (f.unifi_summary || {}).gw_cpu_pct : null);
+        h.unifiCpu.push(gwCpu !== null && gwCpu !== undefined ? Number(gwCpu) : null);
+        h.cpuTemp.push(f.sensors && f.sensors.cpu_max_c != null ? Number(f.sensors.cpu_max_c) : null);
+        h.mos.push(f.mos_score ? Number(Number(f.mos_score).toFixed(2)) : null);
         h.r640Cpu.push(Number(f.cpu_pct || 0));
 
         if (h.labels.length > h.maxLen) {
@@ -573,6 +579,144 @@ const App = {
         ],
       });
     }
+    for (const [key, id] of [['dashLat', 'dashLatChart'], ['dashFlow', 'dashFlowChart'], ['dashLoad', 'dashLoadChart'], ['dashRecent', 'dashRecentChart']]) {
+      const el = document.getElementById(id);
+      if (el && window.echarts) this.charts[key] = echarts.init(el);
+    }
+  },
+
+  // Shared look for the small Home charts
+  miniChartBase(yAxis, labels) {
+    const axisLabel = { color: '#64748B', fontSize: 10.5 };
+    return {
+      animation: false,
+      grid: { top: 26, right: Array.isArray(yAxis) && yAxis.length > 1 ? 42 : 12, bottom: 22, left: 44 },
+      tooltip: { trigger: 'axis', confine: true },
+      legend: { top: 0, right: 0, itemWidth: 12, itemHeight: 7, textStyle: { color: '#475569', fontSize: 10.5 } },
+      xAxis: { type: 'category', boundaryGap: false, data: labels || this.history.labels, axisLabel: { ...axisLabel, hideOverlap: true }, axisLine: { lineStyle: { color: '#DFE5ED' } } },
+      yAxis: (Array.isArray(yAxis) ? yAxis : [yAxis]).map((y, i) => ({
+        type: 'value', min: 0, splitLine: { show: i === 0, lineStyle: { color: '#EEF2F6' } },
+        nameTextStyle: { color: '#64748B', fontSize: 10 }, axisLabel, ...y,
+      })),
+    };
+  },
+
+  // When nothing is running, show the latest finished test instead of flat zero lines
+  async loadLastRunForHome() {
+    const last = (this.runs || []).find((r) => (r.summary || {}).sample_count > 1 && r.status !== 'running');
+    if (!last || (this._lastRun && this._lastRun.id === last.id)) return;
+    try {
+      const run = await this.api(`/api/runs/${last.id}`);
+      const ss = run.samples || [];
+      this._lastRun = {
+        id: run.id, name: run.name,
+        labels: ss.map((s) => `${s.elapsed_sec}s`),
+        latAvg: ss.map((s) => Number(s.lat_avg_us || 0)), latP99: ss.map((s) => Number(s.p99_lat_us || 0)), jitter: ss.map((s) => Number(s.jitter_us || 0)),
+        activeFlows: ss.map((s) => Number(s.active_flows || 0)), estSessions: ss.map((s) => Number(s.established_sessions || 0)), cps: ss.map((s) => Number(s.cps || 0)),
+      };
+      if (this.latest && !this.latest.running) this.updateDashMiniCharts(this.latest);
+    } catch (_) {}
+  },
+
+  updateDashMiniCharts(f) {
+    const live = this.history;
+    // Idle and no live measurements in the buffer -> chart the latest finished test
+    const liveHasData = live.latAvg.some((v) => v > 0) || live.activeFlows.some((v) => v > 0);
+    const useLast = !f.running && !liveHasData && this._lastRun;
+    const h = useLast ? { ...live, ...this._lastRun } : live;
+    const lastNote = useLast ? `last test #${this._lastRun.id}` : '';
+    const line = (name, data, color, extra = {}) => ({ name, type: 'line', smooth: true, showSymbol: false, connectNulls: true, lineStyle: { width: 1.8, color }, itemStyle: { color }, data, ...extra });
+
+    // Latency & jitter (ms when large, μs otherwise)
+    if (this.charts.dashLat) {
+      const maxLat = Math.max(0, ...h.latAvg, ...h.latP99);
+      const ms = maxLat >= 2000;
+      const k = ms ? 1 / 1000 : 1;
+      const u = ms ? 'ms' : 'μs';
+      const sc = (arr) => arr.map((v) => +(v * k).toFixed(ms ? 2 : 1));
+      this.charts.dashLat.setOption({
+        ...this.miniChartBase({ name: u }, h.labels),
+        series: [
+          line('Avg', sc(h.latAvg), '#1769D2', { areaStyle: { color: 'rgba(23,105,210,0.08)' } }),
+          line('P99', sc(h.latP99), '#D97706'),
+          line('Jitter', sc(h.jitter), '#0D9488', { lineStyle: { width: 1.5, color: '#0D9488', type: 'dashed' } }),
+        ],
+      }, true);
+      const last = h.latAvg[h.latAvg.length - 1] || 0;
+      document.getElementById('dashLatSub').textContent = useLast ? lastNote : f.running && last ? `${(last * k).toFixed(ms ? 2 : 1)} ${u} avg${f.mos_score ? ` · MOS ${Number(f.mos_score).toFixed(2)}` : ''}` : '';
+    }
+
+    // Connections: active flows + established sessions, new connections/sec on the right
+    if (this.charts.dashFlow) {
+      this.charts.dashFlow.setOption({
+        ...this.miniChartBase([{ name: 'flows' }, { name: '/s' }], h.labels),
+        series: [
+          line('Active flows', h.activeFlows, '#1769D2', { areaStyle: { color: 'rgba(23,105,210,0.08)' } }),
+          line('TCP sessions', h.estSessions, '#15803D'),
+          line('New/s', h.cps, '#D97706', { yAxisIndex: 1, lineStyle: { width: 1.5, color: '#D97706', type: 'dashed' } }),
+        ],
+      }, true);
+      document.getElementById('dashFlowSub').textContent = useLast ? lastNote : f.running ? `${Number(f.active_flows || 0).toLocaleString()} flows · ${Number(f.cps || 0).toFixed(0)}/s` : '';
+    }
+
+    // Server CPU % (+ gateway CPU when UniFi is connected) and CPU temperature on the right
+    if (this.charts.dashLoad) {
+      const hg = live;
+      const hasGw = hg.unifiCpu.some((v) => v !== null && v !== undefined);
+      const hasTemp = hg.cpuTemp.some((v) => v !== null && v !== undefined);
+      this.charts.dashLoad.setOption({
+        ...this.miniChartBase([{ name: '%', max: 100 }, { name: '°C', min: 20, max: 90, show: hasTemp }], live.labels),
+        series: [
+          line('R640 CPU', hg.r640Cpu, '#64748B', { areaStyle: { color: 'rgba(100,116,139,0.08)' } }),
+          ...(hasGw ? [line('Gateway CPU', hg.unifiCpu, '#7C3AED')] : []),
+          ...(hasTemp ? [line('CPU temp', hg.cpuTemp, '#DC2626', { yAxisIndex: 1, lineStyle: { width: 1.5, color: '#DC2626', type: 'dashed' } })] : []),
+        ],
+      }, true);
+      const s = f.sensors || {};
+      document.getElementById('dashLoadSub').textContent = [
+        `${Number(f.cpu_pct || 0).toFixed(0)}% CPU`,
+        s.cpu_max_c != null ? `${Number(s.cpu_max_c).toFixed(0)}°C` : '',
+        s.inlet_c != null ? `inlet ${Number(s.inlet_c).toFixed(0)}°C` : '',
+      ].filter(Boolean).join(' · ');
+    }
+  },
+
+  // Bar chart of the last tests: received throughput (bars) and loss (line) — click a bar to open the test
+  renderDashRecentChart() {
+    const ch = this.charts.dashRecent;
+    if (!ch) return;
+    const runs = (this.runs || []).filter((r) => (r.summary || {}).sample_count).slice(0, 12).reverse();
+    if (!runs.length) {
+      ch.clear();
+      return;
+    }
+    const maxBps = Math.max(...runs.map((r) => Number(r.summary.avg_rx_bps || 0)));
+    const gbps = maxBps >= 1e9;
+    const k = gbps ? 1e9 : 1e6;
+    const engineColor = { trex_astf: '#1769D2', trex_stl: '#0EA5E9', internet_wan: '#10B981', hybrid: '#7C3AED' };
+    ch.setOption({
+      animation: false,
+      grid: { top: 22, right: 40, bottom: 20, left: 44 },
+      tooltip: {
+        trigger: 'axis', confine: true,
+        formatter: (ps) => {
+          const r = runs[ps[0].dataIndex];
+          const s = r.summary || {};
+          return `<strong>#${r.id} ${this.esc(r.name)}</strong><br/>Received ${this.fmtBps(s.avg_rx_bps)}<br/>Loss ${Number(s.drop_pct || 0).toFixed(3)}%<br/>Latency ${this.fmtLatency(s.lat_avg_us).val} ${this.fmtLatency(s.lat_avg_us).unit}`;
+        },
+      },
+      xAxis: { type: 'category', data: runs.map((r) => `#${r.id}`), axisLabel: { color: '#64748B', fontSize: 10 }, axisLine: { lineStyle: { color: '#DFE5ED' } } },
+      yAxis: [
+        { type: 'value', name: gbps ? 'Gbps' : 'Mbps', min: 0, nameTextStyle: { color: '#64748B', fontSize: 10 }, axisLabel: { color: '#64748B', fontSize: 10 }, splitLine: { lineStyle: { color: '#EEF2F6' } } },
+        { type: 'value', name: 'loss %', min: 0, nameTextStyle: { color: '#64748B', fontSize: 10 }, axisLabel: { color: '#64748B', fontSize: 10 }, splitLine: { show: false } },
+      ],
+      series: [
+        { name: 'Received', type: 'bar', barMaxWidth: 22, data: runs.map((r) => ({ value: +(Number(r.summary.avg_rx_bps || 0) / k).toFixed(2), itemStyle: { color: engineColor[r.traffic_engine] || '#94A3B8', borderRadius: [3, 3, 0, 0] } })) },
+        { name: 'Loss %', type: 'line', yAxisIndex: 1, symbolSize: 5, lineStyle: { color: '#DC2626', width: 1.5 }, itemStyle: { color: '#DC2626' }, data: runs.map((r) => +Number(r.summary.drop_pct || 0).toFixed(3)) },
+      ],
+    }, true);
+    ch.off('click');
+    ch.on('click', (p) => { const r = runs[p.dataIndex]; if (r) StudioPages.showRunDetailModal(r.id); });
   },
 
   fmtLatency(us) {
@@ -659,6 +803,13 @@ const App = {
     const engineNames = { trex_astf: 'TRex stateful', trex_stl: 'TRex stateless', internet_wan: 'Internet / WAN', hybrid: 'Hybrid' };
     document.getElementById('dashChartEngineLabel').textContent = f.running ? (engineNames[f.traffic_engine] || f.traffic_engine || '') : '';
 
+    // --- Live mini charts (throttled to ~1/s when idle) ---
+    const nowMs = Date.now();
+    if (f.running || !this._miniTs || nowMs - this._miniTs > 1000) {
+      this._miniTs = nowMs;
+      this.updateDashMiniCharts(f);
+    }
+
     // --- UniFi card ---
     this.renderDashUniFiStack(f);
 
@@ -743,6 +894,8 @@ const App = {
   renderDashRecentRuns() {
     const tbody = document.getElementById('dashRecentRunsBody');
     if (!tbody) return;
+    this.renderDashRecentChart();
+    this.loadLastRunForHome();
     if (!this.runs || this.runs.length === 0) {
       tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text-secondary);padding:18px;">No tests yet — try a one-click test.</td></tr>`;
       return;

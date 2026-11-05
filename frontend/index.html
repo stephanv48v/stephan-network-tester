@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=5.4" />
+  <link rel="stylesheet" href="/static/styles.css?v=5.5" />
 </head>
 <body>
   <div class="app-shell">
@@ -173,6 +173,22 @@
             </div>
           </div>
 
+          <!-- Live mini charts -->
+          <div class="grid-3 home-mini-charts">
+            <div class="card">
+              <div class="card-header"><div class="card-title">Latency &amp; jitter</div><span class="card-subtitle" id="dashLatSub"></span></div>
+              <div id="dashLatChart" class="mini-chart"></div>
+            </div>
+            <div class="card">
+              <div class="card-header"><div class="card-title">Connections</div><span class="card-subtitle" id="dashFlowSub"></span></div>
+              <div id="dashFlowChart" class="mini-chart"></div>
+            </div>
+            <div class="card">
+              <div class="card-header"><div class="card-title">Server &amp; gateway load</div><span class="card-subtitle" id="dashLoadSub"></span></div>
+              <div id="dashLoadChart" class="mini-chart"></div>
+            </div>
+          </div>
+
           <!-- Recent results, network, system -->
           <div class="grid-home-bot">
             <div class="card">
@@ -180,6 +196,7 @@
                 <div class="card-title">Recent tests</div>
                 <button class="btn btn-outline btn-sm" onclick="App.navigate('test-history')">View all &rarr;</button>
               </div>
+              <div id="dashRecentChart" style="width:100%;height:150px;margin-bottom:6px;"></div>
               <div class="table-wrap">
                 <table class="data-table">
                   <thead><tr><th>Test</th><th>Throughput</th><th>Loss</th><th>Result</th><th></th></tr></thead>
@@ -300,8 +317,8 @@
 
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="/static/app.js?v=5.4"></script>
-  <script src="/static/pages_studio.js?v=5.4"></script>
-  <script src="/static/pages_infra.js?v=5.4"></script>
+  <script src="/static/app.js?v=5.5"></script>
+  <script src="/static/pages_studio.js?v=5.5"></script>
+  <script src="/static/pages_infra.js?v=5.5"></script>
 </body>
 </html>
