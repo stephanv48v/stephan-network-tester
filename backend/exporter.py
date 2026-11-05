@@ -18,6 +18,7 @@ import csv
 import datetime
 import io
 import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from xml.sax.saxutils import escape as _esc
@@ -436,71 +437,22 @@ def _chart_correlation(samples: List[Dict[str, Any]]) -> io.BytesIO:
 
 
 # ---------------------------------------------------------------------------
-# Codeblue logo (same geometry as frontend/static/brand/codeblue-logo.svg, viewBox 396 x 112)
+# Codeblue logo: the official artwork, traced to vector (frontend/static/brand/*.svg)
+# and rendered to transparent PNGs (backend/assets/) because reportlab can't draw SVG.
 # ---------------------------------------------------------------------------
-CODEBLUE_NAVY = colors.HexColor("#1B3F5E")
-CODEBLUE_LIGHT = colors.HexColor("#8CC8F4")
-LOGO_VB_W = 496.0
+_ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+LOGO_ASPECT = 1924.0 / 512.0  # width / height of the logo artwork
 
 
 def draw_codeblue_logo(c: Any, x: float, y: float, height: float, on_dark: bool = False, with_tagline: bool = True) -> float:
-    """Draw the codeblue logo (brand colours) with its bottom-left at (x, y). Returns the drawn width.
-    On dark backgrounds it sits on a white rounded plate, like the web UI."""
-    vb_h = 134.0 if with_tagline else 72.0
-    s = height / vb_h
-    top = y + height
-    if on_dark:
-        pad = 0.18 * height
-        c.saveState()
-        c.setFillColor(colors.white)
-        c.roundRect(x - pad, y - pad, LOGO_VB_W * s + 2 * pad, height + 2 * pad, 0.2 * height, stroke=0, fill=1)
-        c.restoreState()
-
-    def P(sx: float, sy: float) -> Tuple[float, float]:
-        return x + sx * s, top - sy * s
-
-    def arc(cx: float, cy: float, r: float, start: float, extent: float) -> None:
-        # reportlab angles are counter-clockwise in PDF space (y up)
-        px, py = P(cx, cy)
-        rr = r * s
-        p = c.beginPath()
-        p.arc(px - rr, py - rr, px + rr, py + rr, startAng=start, extent=extent)
-        c.drawPath(p, stroke=1, fill=0)
-
-    def line(x1: float, y1: float, x2: float, y2: float) -> None:
-        a, b = P(x1, y1)
-        d, e = P(x2, y2)
-        c.line(a, b, d, e)
-
-    c.saveState()
-    c.setLineCap(1)
-    c.setLineJoin(1)
-    c.setLineWidth(11 * s)
-    c.setStrokeColor(CODEBLUE_NAVY)
-    arc(25.5, 42, 20, 45, 270)                 # c
-    arc(163.5, 42, 20, 0, 360)                 # d bowl
-    line(183.5, 12.5, 183.5, 62)               # d stem
-    line(212.5, 42, 252.5, 42)                 # e bar
-    arc(232.5, 42, 20, 0, 320)                 # e
-    line(281.5, 12.5, 281.5, 62)               # b stem
-    arc(301.5, 42, 20, 0, 360)                 # b bowl
-    line(350.5, 12.5, 350.5, 62)               # l
-    line(379.5, 22, 379.5, 42)                 # u left
-    arc(399.5, 42, 20, 180, 180)               # u bottom
-    line(419.5, 22, 419.5, 62)                 # u right
-    line(448.5, 42, 488.5, 42)                 # e bar
-    arc(468.5, 42, 20, 0, 320)                 # e
-    c.setStrokeColor(CODEBLUE_LIGHT)
-    arc(94.5, 42, 20, 145, 250)                # o = power ring (gap at the top)
-    line(94.5, 12.5, 94.5, 45)                 # power line
-    if with_tagline:
-        c.setFillColor(CODEBLUE_NAVY)
-        c.setFont("Helvetica-Bold", 25 * s)
-        tx, ty = P(440, 125)
-        c.drawRightString(tx, ty, "IT services")
-    c.restoreState()
-    return LOGO_VB_W * s
-
+    """Draw the codeblue logo with its bottom-left at (x, y); white lettering on dark backgrounds.
+    Returns the drawn width (0 if the artwork file is missing)."""
+    img = _ASSETS_DIR / ("codeblue-logo-white.png" if on_dark else "codeblue-logo.png")
+    if not img.exists():
+        return 0.0
+    width = height * LOGO_ASPECT
+    c.drawImage(str(img), x, y, width=width, height=height, mask="auto", preserveAspectRatio=True)
+    return width
 
 # ---------------------------------------------------------------------------
 # Reusable PDF Building Blocks (KPI Cards, Callouts, NumberedCanvas)
@@ -543,8 +495,8 @@ class _ReportNumberedCanvas(canvas.Canvas):
             self.drawString(20 * mm, h - 25.4 * mm, self._run_label[:28])
 
             # Codeblue logo, top-right of the cover hero
-            logo_h = 14 * mm
-            logo_w = 496.0 / 134.0 * logo_h
+            logo_h = 15 * mm
+            logo_w = LOGO_ASPECT * logo_h
             draw_codeblue_logo(self, w - 16 * mm - logo_w, h - 14 * mm - logo_h, logo_h, on_dark=True)
 
             # Cover Title
@@ -576,9 +528,9 @@ class _ReportNumberedCanvas(canvas.Canvas):
         self.setFont("Helvetica", 8)
         self.drawString(16 * mm, h - 16.5 * mm, "Codeblue IT Services  /  TRex traffic generation  /  UniFi telemetry")
         # Small codeblue wordmark on the right, run label underneath it
-        logo_h = 5.5 * mm
-        logo_w = 496.0 / 72.0 * logo_h
-        draw_codeblue_logo(self, w - 16 * mm - logo_w, h - 6 * mm - logo_h, logo_h, on_dark=True, with_tagline=False)
+        logo_h = 9 * mm
+        logo_w = LOGO_ASPECT * logo_h
+        draw_codeblue_logo(self, w - 16 * mm - logo_w, h - 3.5 * mm - logo_h, logo_h, on_dark=True)
         self.setFillColor(colors.HexColor("#DBEAFE"))
         self.setFont("Helvetica-Bold", 7.5)
         self.drawRightString(w - 16 * mm, h - 19.5 * mm, self._run_label)
