@@ -872,6 +872,17 @@
 
               {/* Quick Export & Status Bar */}
               <div className="flex items-center gap-2">
+                <button
+                  onClick={async () => {
+                    await fetch("/api/system/git-pull", { method: "POST" });
+                    showToast("Checking GitHub origin/main & auto-deploying updates...", "info");
+                    setTimeout(() => window.location.reload(), 3000);
+                  }}
+                  className="px-3 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-mono text-purple-300 transition"
+                  title="Auto-Deploy Daemon polls GitHub every 15s automatically, or click to pull immediately"
+                >
+                  🔄 Git Auto-Sync: ON
+                </button>
                 <a
                   href="/api/runs/live/export/csv"
                   className="px-3 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-mono text-cyan-300 transition"

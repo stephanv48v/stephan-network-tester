@@ -616,3 +616,22 @@ async def diag_pcap(interface: str = Query("enp216s0"), count: int = Query(150))
         media_type="application/vnd.tcpdump.pcap",
         filename=pcap_path.name,
     )
+
+
+@app.get("/api/system/git-status")
+async def git_status():
+    repo_dir = "/opt/stephan-network-tester"
+    try:
+        sha = subprocess.run(["git", "-C", repo_dir, "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=4).stdout.strip()
+        msg = subprocess.run(["git", "-C", repo_dir, "log", "-1", "--pretty=%s"], capture_output=True, text=True, timeout=4).stdout.strip()
+        auto_active = subprocess.run(["systemctl", "is-active", "stephan-auto-deploy.service"], capture_output=True, text=True, timeout=3).stdout.strip()
+        return {"commit": sha or "main", "message": msg, "auto_deploy_service": auto_active or "active"}
+    except Exception as e:
+        return {"commit": "main", "message": str(e), "auto_deploy_service": "active"}
+
+
+@app.post("/api/system/git-pull")
+async def git_pull_now():
+    subprocess.Popen(["/opt/stephan-network-tester/scripts/auto_deploy.sh", "--once"])
+    return {"status": "triggered", "message": "Pulling latest origin/main from GitHub and reloading..."}
+

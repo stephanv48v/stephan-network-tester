@@ -1,0 +1,17 @@
+[Unit]
+Description=Stephan Van Vuuren's Network Tester - Git Auto-Pull & Auto-Deploy Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/stephan-network-tester
+ExecStart=/opt/stephan-network-tester/scripts/auto_deploy.sh
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
