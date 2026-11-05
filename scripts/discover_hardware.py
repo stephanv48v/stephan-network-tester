@@ -271,22 +271,25 @@ def discover_interfaces() -> Dict[str, Any]:
         interfaces.append({
             "ifname": ifname,
             "pci_address": pci_slot,
+            "pci_bus": pci_slot,
             "description": pci_desc,
             "driver": driver,
             "mac": mac,
             "mtu": mtu,
             "numa_node": numa_node,
-            "operstate": "UP" if eth_info["link_detected"] or operstate == "UP" else "DOWN",
+            "operstate": "up" if (eth_info["link_detected"] or operstate == "UP") else "down",
             "link_detected": eth_info["link_detected"],
-            "speed_mbps": eth_info["speed_mbps"],
+            "speed_mbps": eth_info["speed_mbps"] if (eth_info["link_detected"] or pci_slot == "virtual") else 0,
             "speed_label": eth_info["speed_label"],
             "max_speed_mbps": eth_info["max_speed_mbps"],
+            "max_supported_mbps": eth_info["max_speed_mbps"],
             "max_speed_label": eth_info["max_speed_label"],
             "duplex": eth_info["duplex"],
             "port_type": eth_info["port_type"],
             "partner_max_mbps": eth_info["partner_max_mbps"],
             "speed_warning": eth_info["speed_warning"],
-            "ipv4": ipv4_list,
+            "ipv4": ipv4_list[0] if ipv4_list else "",
+            "ipv4_list": ipv4_list,
             "ipv6": ipv6_list,
             "is_management": is_mgmt,
             "role": "MGMT + Live TX/RX (10GbE)" if is_mgmt and eth_info["max_speed_mbps"] >= 10000 else ("MGMT Protected" if is_mgmt else ("TRex Loopback" if ifname.startswith("veth_trex") else "Test Port (1GbE)")),
@@ -316,23 +319,27 @@ def discover_interfaces() -> Dict[str, Any]:
     one_g_nics = [i for i in phys_nics if i["max_speed_mbps"] == 1000]
     non_mgmt_up = [i for i in phys_nics if not i["is_management"] and i["link_detected"]]
 
+    limitation_msg = (
+        "R640 currently has 1x 10GbE NIC (enp216s0, in use for Management 10.20.30.237 at 100 Mbps) "
+        "and 4x 1GbE Intel I350 NICs (eno1-eno4, currently unpatched). "
+        "Single-box LAN-to-WAN testing through the UniFi EFG using eno1/eno2 supports 10,000 stateful users up to 1 Gbps. "
+        "Achieving full 10 Gbps LAN-to-WAN hairpin across the EFG requires either a dual-port 10GbE SFP+ NIC (DPDK-capable) "
+        "or a dedicated 10GbE WAN-side responder."
+    )
+    can_10g = len([i for i in ten_g_nics if not i["is_management"]]) >= 2
+    mode_code = "physical_lan_wan" if len(non_mgmt_up) >= 2 else "internal_veth_loopback"
     topology_assessment = {
         "ten_gbe_count": len(ten_g_nics),
         "one_gbe_count": len(one_g_nics),
         "non_mgmt_linked_count": len(non_mgmt_up),
-        "can_10g_lan_to_wan_hairpin": len([i for i in ten_g_nics if not i["is_management"]]) >= 2,
-        "max_verified_efg_hairpin_mbps": (
-            10000 if len([i for i in ten_g_nics if not i["is_management"]]) >= 2
-            else (1000 if len(one_g_nics) >= 2 else 0)
-        ),
-        "current_cabled_mode": "physical_lan_wan" if len(non_mgmt_up) >= 2 else "virtual_loopback_self_test",
-        "limitation_summary": (
-            "R640 currently has 1x 10GbE NIC (enp216s0, in use for Management 10.20.30.237 at 100 Mbps) "
-            "and 4x 1GbE Intel I350 NICs (eno1-eno4, currently unpatched). "
-            "Single-box LAN-to-WAN testing through the UniFi EFG using eno1/eno2 supports 10,000 stateful users up to 1 Gbps. "
-            "Achieving full 10 Gbps LAN-to-WAN hairpin across the EFG requires either a dual-port 10GbE SFP+ NIC (DPDK-capable) "
-            "or a dedicated 10GbE WAN-side responder."
-        ),
+        "can_10g_lan_to_wan_hairpin": can_10g,
+        "can_achieve_10gbps_lan_to_wan": can_10g,
+        "max_verified_efg_hairpin_mbps": 10000 if can_10g else (1000 if len(one_g_nics) >= 2 else 0),
+        "current_cabled_mode": mode_code,
+        "active_mode_code": mode_code,
+        "active_mode_label": "Physical LAN <-> EFG <-> WAN Pair" if len(non_mgmt_up) >= 2 else "Internal veth_trex0 <-> veth_trex1 Self-Test Loopback",
+        "limitation_summary": limitation_msg,
+        "honest_10g_explanation": limitation_msg,
     }
 
     return {
