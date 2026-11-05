@@ -238,6 +238,11 @@ class CapacityFinder:
             # Stop may have landed while this step was starting: make sure it isn't left running
             if engine.running and engine.active_run_id == run_id:
                 engine.stop_test("stopped_by_operator")
+            # Still record what was measured before the stop, so the report isn't empty
+            time.sleep(1.0)
+            part = db.get_test_run(int(run_id), False) or {}
+            self._record(idx, users, run_id, part.get("summary") or {}, False, "stopped by operator during this step",
+                         target, refine, ["stopped"])
             return "cancel"
 
         # The engine flips "running" off before it finishes saving the run summary,
