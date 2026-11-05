@@ -6,9 +6,13 @@ venv/
 .venv/
 .env
 
-# SQLite Databases & Captures
+# SQLite Databases, Encrypted Vault Keys & Captures
+data/
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
+*.key
 *.sqlite
 *.sqlite3
 *.pcap

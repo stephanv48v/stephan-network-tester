@@ -311,9 +311,34 @@ def discover_interfaces() -> Dict[str, Any]:
 
     interfaces.sort(key=sort_key)
 
+    phys_nics = [i for i in interfaces if i["pci_address"] != "virtual"]
+    ten_g_nics = [i for i in phys_nics if i["max_speed_mbps"] >= 10000]
+    one_g_nics = [i for i in phys_nics if i["max_speed_mbps"] == 1000]
+    non_mgmt_up = [i for i in phys_nics if not i["is_management"] and i["link_detected"]]
+
+    topology_assessment = {
+        "ten_gbe_count": len(ten_g_nics),
+        "one_gbe_count": len(one_g_nics),
+        "non_mgmt_linked_count": len(non_mgmt_up),
+        "can_10g_lan_to_wan_hairpin": len([i for i in ten_g_nics if not i["is_management"]]) >= 2,
+        "max_verified_efg_hairpin_mbps": (
+            10000 if len([i for i in ten_g_nics if not i["is_management"]]) >= 2
+            else (1000 if len(one_g_nics) >= 2 else 0)
+        ),
+        "current_cabled_mode": "physical_lan_wan" if len(non_mgmt_up) >= 2 else "virtual_loopback_self_test",
+        "limitation_summary": (
+            "R640 currently has 1x 10GbE NIC (enp216s0, in use for Management 10.20.30.237 at 100 Mbps) "
+            "and 4x 1GbE Intel I350 NICs (eno1-eno4, currently unpatched). "
+            "Single-box LAN-to-WAN testing through the UniFi EFG using eno1/eno2 supports 10,000 stateful users up to 1 Gbps. "
+            "Achieving full 10 Gbps LAN-to-WAN hairpin across the EFG requires either a dual-port 10GbE SFP+ NIC (DPDK-capable) "
+            "or a dedicated 10GbE WAN-side responder."
+        ),
+    }
+
     return {
         "management_interface": mgmt_iface,
         "interfaces": interfaces,
+        "topology_assessment": topology_assessment,
     }
 
 

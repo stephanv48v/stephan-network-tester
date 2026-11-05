@@ -1,11 +1,11 @@
 """
-FastAPI Backend, 250ms WebSocket Telemetry Streamer, Cron Scheduler, and REST API
-for Stephan Van Vuuren's Network Tester (Dell PowerEdge R640).
+FastAPI Backend, 250ms WebSocket Telemetry Streamer, UniFi & SNMP Integrations,
+10K-User ASTF/STL Orchestration, and Multi-Format Report Exporter
+for Cisco TRex Network Test Studio (Dell PowerEdge R640).
 """
 import asyncio
 import datetime
 import json
-import os
 import subprocess
 import time
 from contextlib import asynccontextmanager
@@ -15,16 +15,30 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 import database as db
 import diagnostics as diag
 import exporter
-from profiles import PREBUILT_PROFILES, USER_SCALE_PRESETS, calculate_mos_score
+from profiles import (
+    APPLICATION_WORKLOADS,
+    EFG_USER_SCENARIOS,
+    PREBUILT_PROFILES,
+    STAGED_LOAD_STEPS,
+    USER_SCALE_PRESETS,
+    calculate_mos_score,
+    normalize_mix_to_100,
+)
 from scripts.discover_hardware import discover_interfaces, generate_trex_cfg
+from snmp_collector import snmp_collector
 from trex_manager import engine
+from unifi_collector import unifi_collector
 
 
-FRONTEND_HTML_PATH = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+FRONTEND_HTML_PATH = FRONTEND_DIR / "index.html"
+FRONTEND_STATIC_DIR = FRONTEND_DIR / "static"
+FRONTEND_STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class WSConnectionManager:
@@ -58,7 +72,6 @@ _bg_tasks: List[asyncio.Task] = []
 
 
 def _cron_matches_now(cron_expr: str, now_dt: datetime.datetime) -> bool:
-    """Lightweight 5-field cron matcher (min hour dom month dow)."""
     parts = cron_expr.strip().split()
     if len(parts) != 5:
         return False
@@ -88,7 +101,7 @@ def _cron_matches_now(cron_expr: str, now_dt: datetime.datetime) -> bool:
 
 
 async def telemetry_loop() -> None:
-    """250ms high-frequency telemetry loop streaming to all WebSocket clients."""
+    """250ms high-frequency telemetry loop streaming real measurements to WebSocket clients."""
     while True:
         try:
             frame = await asyncio.to_thread(engine.tick_telemetry)
@@ -109,7 +122,6 @@ async def scheduler_loop() -> None:
             for job in jobs:
                 if not job.get("enabled"):
                     continue
-                # Check ISO one-shot timestamp if specified
                 run_at_iso = (job.get("run_at_iso") or "").strip()
                 should_trigger = False
                 if run_at_iso:
@@ -129,11 +141,11 @@ async def scheduler_loop() -> None:
                     req = {
                         "name": f"[Scheduled] {job.get('name')}",
                         "profile_id": job.get("profile_id", "imix"),
-                        "test_mode": job.get("test_mode", "timed"),
+                        "test_mode": job.get("test_mode", "phased"),
                         "duration_sec": job.get("duration_sec", 60),
                         "rate_pct": job.get("rate_pct", 50.0),
-                        "simulated_users": job.get("simulated_users", 500),
-                        "simulated_devices": job.get("simulated_devices", 1200),
+                        "simulated_users": job.get("simulated_users", 1000),
+                        "simulated_devices": job.get("simulated_devices", 2000),
                         **(job.get("config") or {}),
                     }
                     res = await asyncio.to_thread(engine.start_test, req)
@@ -148,70 +160,9 @@ async def scheduler_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
-    # Seed a sample historical run & default settings if database is brand new
-    if not db.list_test_runs(limit=1):
-        seed_id = db.create_test_run(
-            name="R640 Baseline IMIX Verification (500 Users / 1,250 Devices)",
-            profile_id="imix",
-            profile_name=PREBUILT_PROFILES["imix"]["name"],
-            test_mode="timed",
-            duration_sec=15,
-            target_rate_pct=40.0,
-            simulated_users=500,
-            simulated_devices=1250,
-            config={
-                "profile_id": "imix",
-                "test_mode": "timed",
-                "link_capacity_mbps": 10000,
-                "frame_size": 354,
-                "vlan_id": 0,
-                "dscp": 46,
-                "protocol_mix": PREBUILT_PROFILES["imix"]["protocol_mix"],
-            },
-        )
-        base_ts = time.time() - 60
-        for sec in range(1, 16):
-            tx_b = 4_000_000_000.0 * (0.98 + (sec % 3) * 0.01)
-            pps = tx_b / ((354 + 20) * 8)
-            db.insert_telemetry_sample(
-                seed_id,
-                {
-                    "ts": base_ts + sec,
-                    "elapsed_sec": sec,
-                    "rate_pct": 40.0,
-                    "tx_bps": tx_b,
-                    "rx_bps": tx_b,
-                    "tx_pps": pps,
-                    "rx_pps": pps,
-                    "tx_packets": int(pps * sec),
-                    "rx_packets": int(pps * sec),
-                    "dropped_packets": 0,
-                    "drop_pct": 0.0,
-                    "lat_min_us": 24.5,
-                    "lat_avg_us": 42.8 + (sec % 4) * 1.4,
-                    "lat_max_us": 68.2,
-                    "jitter_us": 5.4,
-                    "mos_score": 4.41,
-                    "cpu_pct": 12.5,
-                    "ram_pct": 1.2,
-                },
-            )
-        db.finalize_test_run(seed_id, status="completed")
-
-    if not db.list_scheduled_jobs():
-        db.create_scheduled_job({
-            "name": "Nightly 2:00 AM Full Line-Rate Saturation Audit",
-            "cron_expr": "0 2 * * *",
-            "profile_id": "bw_1518b",
-            "test_mode": "step_ramp",
-            "duration_sec": 60,
-            "rate_pct": 85.0,
-            "simulated_users": 1500,
-            "simulated_devices": 4000,
-            "enabled": True,
-        })
-
-    engine.try_connect_trex()
+    await asyncio.to_thread(engine.try_connect_trex)
+    await asyncio.to_thread(unifi_collector.poll_once, None, False)
+    await asyncio.to_thread(snmp_collector.poll_once, None, False)
     t1 = asyncio.create_task(telemetry_loop())
     t2 = asyncio.create_task(scheduler_loop())
     _bg_tasks.extend([t1, t2])
@@ -221,8 +172,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Stephan Van Vuuren's Network Tester API",
-    version="3.0.0",
+    title="Cisco TRex Network Test Studio API",
+    version="4.0.0",
     lifespan=lifespan,
 )
 
@@ -233,12 +184,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.mount("/static", StaticFiles(directory=str(FRONTEND_STATIC_DIR)), name="static")
+
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_dashboard():
     if FRONTEND_HTML_PATH.exists():
-        return HTMLResponse(content=FRONTEND_HTML_PATH.read_text(encoding="utf-8"), status_code=200)
-    return HTMLResponse("<h1>Stephan Van Vuuren's Network Tester Loading...</h1>", status_code=200)
+        return HTMLResponse(
+            content=FRONTEND_HTML_PATH.read_text(encoding="utf-8"),
+            status_code=200,
+            headers={"Cache-Control": "no-cache"},
+        )
+    return HTMLResponse("<h1>Cisco TRex Network Test Studio Loading...</h1>", status_code=200)
 
 
 @app.websocket("/ws/telemetry")
@@ -248,12 +205,13 @@ async def websocket_telemetry(ws: WebSocket):
         if engine.latest_telemetry:
             await ws.send_text(json.dumps(engine.latest_telemetry))
         while True:
-            # Keep connection alive and accept optional client commands over WS
             msg_text = await ws.receive_text()
             try:
                 cmd = json.loads(msg_text)
                 if cmd.get("action") == "set_rate":
-                    engine.update_rate(float(cmd.get("rate_pct", 50.0)))
+                    await asyncio.to_thread(engine.update_rate, float(cmd.get("rate_pct", 50.0)))
+                elif cmd.get("action") == "stop":
+                    await asyncio.to_thread(engine.stop_test, "emergency_stopped")
             except Exception:
                 pass
     except WebSocketDisconnect:
@@ -262,6 +220,9 @@ async def websocket_telemetry(ws: WebSocket):
         ws_manager.disconnect(ws)
 
 
+# ---------------------------------------------------------------------------
+# Status, Profiles, Workloads & 10K-User Scenarios
+# ---------------------------------------------------------------------------
 @app.get("/api/status")
 async def get_status():
     return engine.latest_telemetry or await asyncio.to_thread(engine.tick_telemetry)
@@ -269,33 +230,57 @@ async def get_status():
 
 @app.get("/api/profiles")
 async def get_profiles():
+    custom_list = await asyncio.to_thread(db.list_custom_profiles)
+    all_profiles = list(PREBUILT_PROFILES.values()) + custom_list
     return {
-        "profiles": list(PREBUILT_PROFILES.values()),
+        "profiles": all_profiles,
+        "prebuilt_profiles": list(PREBUILT_PROFILES.values()),
+        "custom_profiles": custom_list,
+        "application_workloads": APPLICATION_WORKLOADS,
+        "user_scale_presets": USER_SCALE_PRESETS,
+        "efg_scenarios": EFG_USER_SCENARIOS,
+        "staged_load_steps": STAGED_LOAD_STEPS,
+    }
+
+
+@app.post("/api/profiles/custom")
+async def save_custom_profile(payload: Dict[str, Any]):
+    if payload.get("protocol_mix"):
+        payload["protocol_mix"] = normalize_mix_to_100(payload["protocol_mix"])
+    saved = await asyncio.to_thread(db.save_custom_profile, payload)
+    await asyncio.to_thread(
+        db.log_audit,
+        "Traffic Profiles",
+        "Saved Custom Profile",
+        saved.get("name", ""),
+        f"ID={saved.get('id')}, Engine={saved.get('traffic_engine', 'trex_astf')}",
+    )
+    return {"status": "saved", "profile": saved}
+
+
+@app.delete("/api/profiles/custom/{profile_id}")
+async def remove_custom_profile(profile_id: str):
+    ok = await asyncio.to_thread(db.delete_custom_profile, profile_id)
+    if ok:
+        await asyncio.to_thread(db.log_audit, "Traffic Profiles", "Deleted Custom Profile", profile_id, "")
+    return {"deleted": ok}
+
+
+@app.get("/api/scenarios")
+async def get_scenarios():
+    return {
+        "scenarios": EFG_USER_SCENARIOS,
+        "staged_load_steps": STAGED_LOAD_STEPS,
         "user_scale_presets": USER_SCALE_PRESETS,
     }
 
 
-@app.get("/api/hardware")
-async def get_hardware():
-    disc = await asyncio.to_thread(engine.get_hardware_snapshot, True)
-    trex_cfg = ""
-    if Path("/etc/trex_cfg.yaml").exists():
-        trex_cfg = Path("/etc/trex_cfg.yaml").read_text(encoding="utf-8")
-    huge_info = {}
-    try:
-        for line in Path("/proc/meminfo").read_text().splitlines():
-            if "Huge" in line:
-                k, v = line.split(":", 1)
-                huge_info[k.strip()] = v.strip()
-    except Exception:
-        pass
-    return {
-        **disc,
-        "trex_cfg_yaml": trex_cfg,
-        "hugepages": huge_info,
-        "trex_connected": engine.trex_connected,
-        "trex_version": engine.trex_server_version,
-    }
+# ---------------------------------------------------------------------------
+# Test Execution, Pre-Check, Emergency Stop & RFC 2544-Style Sweep
+# ---------------------------------------------------------------------------
+@app.post("/api/test/precheck")
+async def precheck_test(payload: Dict[str, Any]):
+    return await asyncio.to_thread(engine.precheck_test, payload)
 
 
 @app.post("/api/test/start")
@@ -304,8 +289,9 @@ async def start_test(payload: Dict[str, Any]):
 
 
 @app.post("/api/test/stop")
-async def stop_test():
-    return await asyncio.to_thread(engine.stop_test, "completed")
+async def stop_test(payload: Optional[Dict[str, Any]] = None):
+    reason = (payload or {}).get("status") or "completed"
+    return await asyncio.to_thread(engine.stop_test, str(reason))
 
 
 @app.post("/api/test/rate")
@@ -326,131 +312,195 @@ async def update_scale(payload: Dict[str, Any]):
 
 
 @app.post("/api/certification/rfc2544")
-async def run_rfc2544_certification(payload: Dict[str, Any]):
+async def run_rfc2544_sweep(payload: Dict[str, Any]):
     """
-    1-Click RFC 2544 & ITU-T Y.1564 Automated Site Certification Sweep.
-    Tests all standard Ethernet frame sizes (64B, 128B, 256B, 512B, 1024B, 1280B, 1518B, 9000B),
-    records telemetry into SQLite, and produces a downloadable Pass/Fail Site Certificate Run.
+    Execute a REAL Cisco TRex STL multi-frame-size sweep (64B, 128B, 256B, 512B, 1024B, 1280B, 1518B, optional 9000B).
+    Measures genuine hardware/DPDK TX/RX bps, PPS, packet drops, and PG_ID latency for every frame size.
     """
     if engine.running:
-        await asyncio.to_thread(engine.stop_test, "stopped_for_rfc2544")
+        await asyncio.to_thread(engine.stop_test, "stopped_for_benchmark")
 
-    site_name = payload.get("site_name", "Customer Site Network")
-    link_mbps = int(payload.get("link_capacity_mbps", engine.link_capacity_mbps))
-    users = int(payload.get("simulated_users", 1000))
-    devices = int(payload.get("simulated_devices", 2500))
-    frame_sizes = [64, 128, 256, 512, 1024, 1280, 1518, 9000]
+    site_name = str(payload.get("site_name") or "UniFi EFG Benchmark")
+    target_gbps = max(0.01, float(payload.get("target_gbps", 1.0)))
+    trial_sec = max(2, min(30, int(payload.get("trial_duration_sec", 3))))
+    include_jumbo = bool(payload.get("include_jumbo", False))
+    frame_sizes = payload.get("frame_sizes") or ([64, 128, 256, 512, 1024, 1280, 1518] + ([9000] if include_jumbo else []))
+    thresholds = payload.get("thresholds") if isinstance(payload.get("thresholds"), dict) else None
+
+    ok_stl = await asyncio.to_thread(engine.ensure_trex_daemon_mode, "STL")
+    if not ok_stl or engine.client is None:
+        raise HTTPException(status_code=503, detail="Cisco TRex STL engine could not be initialized on 127.0.0.1:4501")
 
     run_id = await asyncio.to_thread(
         db.create_test_run,
-        f"RFC 2544 Site Certification - {site_name} ({link_mbps} Mbps)",
-        "imix",
-        "RFC 2544 & Y.1564 Automated Frame-Size Sweep",
-        "rfc2544",
-        len(frame_sizes) * 2,
-        90.0,
-        users,
-        devices,
+        f"Frame-Size Sweep (RFC 2544-style) — {site_name}",
+        "bw_1518b",
+        "Automated Multi-Frame-Size Throughput & Latency Sweep (STL)",
+        "rfc2544_sweep",
+        len(frame_sizes) * trial_sec,
+        min(100.0, round(target_gbps * 10.0, 2)),
+        int(payload.get("simulated_users", 1000)),
+        int(payload.get("simulated_devices", 2000)),
         {
             "site_name": site_name,
-            "link_capacity_mbps": link_mbps,
-            "frame_size": 1518,
-            "vlan_id": payload.get("vlan_id", 0),
-            "dscp": 46,
+            "target_gbps": target_gbps,
+            "target_bps": target_gbps * 1e9,
+            "base_target_bps": target_gbps * 1e9,
+            "trial_duration_sec": trial_sec,
+            "frame_sizes": frame_sizes,
+            "methodology": "Automated fixed-duration Cisco TRex STL frame-size trials (not full binary-search zero-loss RFC 2544 certification unless run across external physical test ports).",
         },
+        "trex_stl",
+        thresholds,
     )
 
-    frame_results = []
-    now_base = time.time()
-    for idx, fsz in enumerate(frame_sizes):
-        wire_sz = fsz + 20
-        # Realistic line efficiency per frame size
-        eff = 0.88 if fsz == 64 else (0.94 if fsz <= 256 else 0.985)
-        tx_bps = link_mbps * 1_000_000.0 * eff
-        rx_bps = tx_bps * (0.9998 if fsz >= 128 else 0.9992)
-        tx_pps = tx_bps / (wire_sz * 8.0)
-        rx_pps = rx_bps / (wire_sz * 8.0)
-        drops = max(0, int((tx_pps - rx_pps) * 2))
-        drop_pct = ((tx_bps - rx_bps) / tx_bps) * 100.0
-        lat_avg = 24.0 + (fsz / 120.0) * 4.5
-        jitter = 3.8 + (1.2 if fsz == 64 else 0.6)
-        mos = calculate_mos_score(lat_avg, jitter, drop_pct)
+    frame_results: List[Dict[str, Any]] = []
+    elapsed_counter = 0
 
-        for sub in (1, 2):
-            sec = idx * 2 + sub
-            await asyncio.to_thread(
-                db.insert_telemetry_sample,
-                run_id,
-                {
-                    "ts": now_base + sec,
-                    "elapsed_sec": sec,
-                    "rate_pct": round(eff * 100.0, 1),
-                    "tx_bps": tx_bps,
-                    "rx_bps": rx_bps,
-                    "tx_pps": tx_pps,
-                    "rx_pps": rx_pps,
-                    "tx_packets": int(tx_pps * sec),
-                    "rx_packets": int(rx_pps * sec),
-                    "dropped_packets": drops,
-                    "drop_pct": drop_pct,
-                    "lat_min_us": round(lat_avg * 0.72, 1),
-                    "lat_avg_us": round(lat_avg, 1),
-                    "lat_max_us": round(lat_avg * 1.45, 1),
-                    "jitter_us": round(jitter, 1),
-                    "mos_score": mos,
-                    "cpu_pct": 18.4,
-                    "ram_pct": 1.4,
-                },
+    for fsz in frame_sizes:
+        fsz_int = max(64, min(9000, int(fsz)))
+
+        def _start_trial(sz: int) -> None:
+            c = engine.client
+            c.reset(ports=[0, 1])
+            c.clear_stats(ports=[0, 1])
+            streams = engine._build_trex_stl_streams(
+                PREBUILT_PROFILES["bw_1518b"],
+                {"override_frame_size": sz, "simulated_users": 1000, "vlan_id": int(payload.get("vlan_id", 0) or 0)},
+                port_idx=0,
             )
+            c.add_streams(streams, ports=[0])
+            mult_str = f"{target_gbps:.3f}gbps" if target_gbps >= 1.0 else f"{max(1.0, target_gbps * 1000.0):.1f}mbps"
+            c.start(ports=[0], mult=mult_str, duration=trial_sec + 1)
 
+        await asyncio.to_thread(_start_trial, fsz_int)
+
+        trial_samples: List[Dict[str, Any]] = []
+        for _ in range(trial_sec):
+            await asyncio.sleep(1.0)
+            elapsed_counter += 1
+            m = await asyncio.to_thread(engine._collect_real_trex_metrics)
+            mos = calculate_mos_score(m["lat_avg_us"], m["jitter_us"], m["drop_pct"])
+            sample_obj = {
+                "ts": time.time(),
+                "elapsed_sec": elapsed_counter,
+                "phase_name": f"{fsz_int}B",
+                "rate_pct": min(100.0, target_gbps * 10.0),
+                "target_bps": target_gbps * 1e9,
+                "tx_bps": m["tx_bps"],
+                "rx_bps": m["rx_bps"],
+                "tx_pps": m["tx_pps"],
+                "rx_pps": m["rx_pps"],
+                "tx_packets": m["tx_packets"],
+                "rx_packets": m["rx_packets"],
+                "dropped_packets": m["dropped_packets"],
+                "drop_pct": m["drop_pct"],
+                "lat_min_us": m["lat_min_us"],
+                "lat_avg_us": m["lat_avg_us"],
+                "p95_lat_us": m["p95_lat_us"],
+                "p99_lat_us": m["p99_lat_us"],
+                "lat_max_us": m["lat_max_us"],
+                "jitter_us": m["jitter_us"],
+                "mos_score": mos,
+                "cpu_pct": 0.0,
+                "ram_pct": 0.0,
+                "telemetry_source": f"Cisco TRex STL ({fsz_int}B Trial)",
+            }
+            trial_samples.append(sample_obj)
+            await asyncio.to_thread(db.insert_telemetry_sample, run_id, sample_obj)
+
+        await asyncio.to_thread(lambda: engine.client.stop(ports=[0, 1]))
+
+        last_s = trial_samples[-1]
+        avg_rx_mbps = sum(s["rx_bps"] for s in trial_samples) / len(trial_samples) / 1e6
+        avg_tx_mbps = sum(s["tx_bps"] for s in trial_samples) / len(trial_samples) / 1e6
+        avg_kpps = sum(s["rx_pps"] for s in trial_samples) / len(trial_samples) / 1e3
         frame_results.append({
-            "frame_size_bytes": fsz,
-            "line_efficiency_pct": round(eff * 100.0, 2),
-            "throughput_mbps": round(rx_bps / 1e6, 2),
-            "packet_rate_kpps": round(rx_pps / 1e3, 2),
-            "lat_avg_us": round(lat_avg, 1),
-            "jitter_us": round(jitter, 1),
-            "drop_pct": round(drop_pct, 4),
-            "mos_score": mos,
-            "status": "PASS",
+            "frame_size_bytes": fsz_int,
+            "tx_mbps": round(avg_tx_mbps, 2),
+            "throughput_mbps": round(avg_rx_mbps, 2),
+            "packet_rate_kpps": round(avg_kpps, 2),
+            "lat_avg_us": round(last_s["lat_avg_us"], 2),
+            "p99_lat_us": round(last_s["p99_lat_us"], 2),
+            "jitter_us": round(last_s["jitter_us"], 2),
+            "drop_pct": round(last_s["drop_pct"], 4),
+            "status": "RECORDED" if not (thresholds and thresholds.get("enabled")) else ("PASS" if last_s["drop_pct"] <= float(thresholds.get("max_loss_pct", 0.1)) else "FAIL"),
         })
 
     summary = await asyncio.to_thread(db.finalize_test_run, run_id, "completed")
+    await asyncio.to_thread(
+        db.log_audit,
+        "Benchmarking",
+        "Completed STL Frame-Size Sweep",
+        f"Run #{run_id}: {site_name}",
+        f"{len(frame_sizes)} frame sizes tested @ {target_gbps} Gbps target",
+    )
     return {
         "status": "completed",
         "run_id": run_id,
         "site_name": site_name,
-        "verdict": "PASS",
+        "verdict": summary.get("verdict", "COMPLETED") if summary else "COMPLETED",
         "summary": summary,
         "frame_matrix": frame_results,
     }
 
 
+# ---------------------------------------------------------------------------
+# Historical Runs, Comparison & Multi-Format Exports (PDF / CSV / JSON)
+# ---------------------------------------------------------------------------
 @app.get("/api/runs")
-async def list_runs(limit: int = Query(50, ge=1, le=200)):
+async def list_runs(limit: int = Query(100, ge=1, le=500)):
     return {"runs": await asyncio.to_thread(db.list_test_runs, limit)}
+
+
+@app.get("/api/runs/compare")
+async def compare_runs(run_a: int = Query(...), run_b: int = Query(...)):
+    comp = await asyncio.to_thread(db.compare_test_runs, run_a, run_b)
+    if not comp:
+        raise HTTPException(status_code=404, detail="One or both test runs were not found")
+    return comp
+
+
+@app.get("/api/runs/compare/export/pdf")
+async def export_comparison_pdf(run_a: int = Query(...), run_b: int = Query(...), inline: int = Query(0)):
+    comp = await asyncio.to_thread(db.compare_test_runs, run_a, run_b)
+    if not comp:
+        raise HTTPException(status_code=404, detail="One or both test runs were not found")
+    pdf_bytes = await asyncio.to_thread(exporter.generate_comparison_pdf_bytes, comp)
+    disp = "inline" if inline else "attachment"
+    filename = f"cisco-trex-comparison-run-{run_a}-vs-{run_b}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'{disp}; filename="{filename}"'},
+    )
+
+
+async def _resolve_live_or_latest_run_id() -> int:
+    if engine.active_run_id:
+        return int(engine.active_run_id)
+    runs = await asyncio.to_thread(db.list_test_runs, 1)
+    if not runs:
+        raise HTTPException(status_code=404, detail="No test runs available")
+    return int(runs[0]["id"])
 
 
 @app.get("/api/runs/live/export/csv")
 async def export_live_csv():
-    run_id = engine.active_run_id
-    if not run_id:
-        runs = await asyncio.to_thread(db.list_test_runs, 1)
-        if not runs:
-            raise HTTPException(status_code=404, detail="No test runs available")
-        run_id = runs[0]["id"]
-    return await export_run_csv(int(run_id))
+    rid = await _resolve_live_or_latest_run_id()
+    return await export_run_csv(rid)
+
+
+@app.get("/api/runs/live/export/json")
+async def export_live_json():
+    rid = await _resolve_live_or_latest_run_id()
+    return await export_run_json(rid)
 
 
 @app.get("/api/runs/live/export/pdf")
-async def export_live_pdf():
-    run_id = engine.active_run_id
-    if not run_id:
-        runs = await asyncio.to_thread(db.list_test_runs, 1)
-        if not runs:
-            raise HTTPException(status_code=404, detail="No test runs available")
-        run_id = runs[0]["id"]
-    return await export_run_pdf(int(run_id))
+async def export_live_pdf(report_type: str = Query("technical"), inline: int = Query(0)):
+    rid = await _resolve_live_or_latest_run_id()
+    return await export_run_pdf(rid, report_type=report_type, inline=inline)
 
 
 @app.get("/api/runs/{run_id}")
@@ -464,6 +514,8 @@ async def get_run_details(run_id: int):
 @app.delete("/api/runs/{run_id}")
 async def remove_run(run_id: int):
     ok = await asyncio.to_thread(db.delete_test_run, run_id)
+    if ok:
+        await asyncio.to_thread(db.log_audit, "Test History", "Deleted Test Run", f"Run #{run_id}", "")
     return {"deleted": ok}
 
 
@@ -473,7 +525,7 @@ async def export_run_csv(run_id: int):
     if not run:
         raise HTTPException(status_code=404, detail="Test run not found")
     csv_bytes = await asyncio.to_thread(exporter.generate_csv_bytes, run)
-    filename = f"stephan-network-tester-run-{run_id}.csv"
+    filename = f"cisco-trex-run-{run_id}-timeseries.csv"
     return Response(
         content=csv_bytes,
         media_type="text/csv",
@@ -481,42 +533,239 @@ async def export_run_csv(run_id: int):
     )
 
 
-@app.get("/api/runs/{run_id}/export/pdf")
-async def export_run_pdf(run_id: int):
+@app.get("/api/runs/{run_id}/export/json")
+async def export_run_json(run_id: int):
     run = await asyncio.to_thread(db.get_test_run, run_id, True)
     if not run:
         raise HTTPException(status_code=404, detail="Test run not found")
-    # Ensure summary is computed even if exporting a currently running test
-    if not run.get("summary"):
-        samples = run.get("samples", [])
-        if samples:
-            run["summary"] = {
-                "max_tx_bps": max(s["tx_bps"] for s in samples),
-                "avg_tx_bps": sum(s["tx_bps"] for s in samples) / len(samples),
-                "max_rx_bps": max(s["rx_bps"] for s in samples),
-                "avg_rx_bps": sum(s["rx_bps"] for s in samples) / len(samples),
-                "max_tx_pps": max(s["tx_pps"] for s in samples),
-                "avg_tx_pps": sum(s["tx_pps"] for s in samples) / len(samples),
-                "total_tx_packets": samples[-1]["tx_packets"],
-                "total_rx_packets": samples[-1]["rx_packets"],
-                "total_dropped_packets": samples[-1]["dropped_packets"],
-                "drop_pct": samples[-1]["drop_pct"],
-                "lat_min_us": min(s["lat_min_us"] for s in samples),
-                "lat_avg_us": sum(s["lat_avg_us"] for s in samples) / len(samples),
-                "lat_max_us": max(s["lat_max_us"] for s in samples),
-                "jitter_avg_us": sum(s["jitter_us"] for s in samples) / len(samples),
-                "mos_avg": sum(s["mos_score"] for s in samples) / len(samples),
-                "verdict": "PASS",
-            }
-    pdf_bytes = await asyncio.to_thread(exporter.generate_pdf_bytes, run)
-    filename = f"stephan-network-tester-report-{run_id}.pdf"
+    json_bytes = await asyncio.to_thread(exporter.generate_json_bytes, run)
+    filename = f"cisco-trex-run-{run_id}-archive.json"
     return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
+        content=json_bytes,
+        media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
+@app.get("/api/runs/{run_id}/export/pdf")
+async def export_run_pdf(
+    run_id: int,
+    report_type: str = Query("technical"),
+    inline: int = Query(0),
+    title: Optional[str] = Query(None),
+    client: Optional[str] = Query(None),
+):
+    run = await asyncio.to_thread(db.get_test_run, run_id, True)
+    if not run:
+        raise HTTPException(status_code=404, detail="Test run not found")
+    pdf_bytes = await asyncio.to_thread(exporter.generate_pdf_bytes, run, report_type, title, client)
+    disp = "inline" if inline else "attachment"
+    filename = f"cisco-trex-{report_type}-report-run-{run_id}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'{disp}; filename="{filename}"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# UniFi Network API + Site Manager Integration Endpoints
+# ---------------------------------------------------------------------------
+@app.get("/api/unifi/config")
+async def get_unifi_config():
+    return {
+        "config": await asyncio.to_thread(unifi_collector.get_config_public),
+        "snapshot": unifi_collector.latest_snapshot,
+    }
+
+
+@app.post("/api/unifi/config")
+async def save_unifi_config(payload: Dict[str, Any]):
+    cfg = await asyncio.to_thread(unifi_collector.save_config, payload)
+    snap = await asyncio.to_thread(unifi_collector.poll_once, engine.active_run_id, True)
+    return {"status": "saved", "config": cfg, "snapshot": snap}
+
+
+@app.post("/api/unifi/test")
+async def test_unifi_connection(payload: Optional[Dict[str, Any]] = None):
+    if payload and any(k in payload for k in ("host", "api_key", "password", "site_manager_key", "auth_mode")):
+        await asyncio.to_thread(unifi_collector.save_config, {**payload, "enabled": True})
+    snap = await asyncio.to_thread(unifi_collector.poll_once, engine.active_run_id, True)
+    return {
+        "connected": bool(snap.get("connected")),
+        "status": snap.get("status"),
+        "error": snap.get("last_error"),
+        "controller_version": snap.get("controller_version"),
+        "api_mode_detected": snap.get("api_mode_detected"),
+        "capabilities": snap.get("capabilities"),
+        "summary": snap.get("summary"),
+        "sites": snap.get("sites", []),
+    }
+
+
+@app.get("/api/unifi/telemetry")
+async def get_unifi_telemetry(refresh: int = Query(0)):
+    if refresh:
+        return await asyncio.to_thread(unifi_collector.poll_once, engine.active_run_id, True)
+    return unifi_collector.latest_snapshot
+
+
+# ---------------------------------------------------------------------------
+# Read-Only SNMPv2c / SNMPv3 Integration Endpoints
+# ---------------------------------------------------------------------------
+@app.get("/api/snmp/config")
+async def get_snmp_config():
+    return {
+        "config": await asyncio.to_thread(snmp_collector.get_config_public),
+        "snapshot": snmp_collector.latest_snapshot,
+    }
+
+
+@app.post("/api/snmp/config")
+async def save_snmp_config(payload: Dict[str, Any]):
+    cfg = await asyncio.to_thread(snmp_collector.save_config, payload)
+    snap = await asyncio.to_thread(snmp_collector.poll_once, engine.active_run_id, True)
+    return {"status": "saved", "config": cfg, "snapshot": snap}
+
+
+@app.post("/api/snmp/test")
+async def test_snmp_connection(payload: Optional[Dict[str, Any]] = None):
+    if payload and any(k in payload for k in ("host", "community", "username", "version")):
+        await asyncio.to_thread(snmp_collector.save_config, {**payload, "enabled": True})
+    snap = await asyncio.to_thread(snmp_collector.poll_once, engine.active_run_id, True)
+    return {
+        "connected": bool(snap.get("connected")),
+        "status": snap.get("status"),
+        "error": snap.get("last_error"),
+        "sys_name": snap.get("sys_name"),
+        "sys_descr": snap.get("sys_descr"),
+        "interface_count": len(snap.get("interfaces") or []),
+        "interfaces": snap.get("interfaces") or [],
+    }
+
+
+@app.get("/api/snmp/telemetry")
+async def get_snmp_telemetry(refresh: int = Query(0)):
+    if refresh:
+        return await asyncio.to_thread(snmp_collector.poll_once, engine.active_run_id, True)
+    return snmp_collector.latest_snapshot
+
+
+# ---------------------------------------------------------------------------
+# Hardware, Unified Network Topology & TRex Daemon Control
+# ---------------------------------------------------------------------------
+@app.get("/api/hardware")
+async def get_hardware():
+    disc = await asyncio.to_thread(engine.get_hardware_snapshot, True)
+    trex_cfg = ""
+    if Path("/etc/trex_cfg.yaml").exists():
+        trex_cfg = Path("/etc/trex_cfg.yaml").read_text(encoding="utf-8")
+    huge_info = {}
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if "Huge" in line:
+                k, v = line.split(":", 1)
+                huge_info[k.strip()] = v.strip()
+    except Exception:
+        pass
+    cpu_freq = None
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if "model name" in line and not cpu_freq:
+                cpu_freq = line.split(":", 1)[1].strip()
+    except Exception:
+        pass
+    return {
+        **disc,
+        "cpu_model": cpu_freq or "2 x Intel Xeon Silver 4110 @ 2.10GHz (32 Threads)",
+        "trex_cfg_yaml": trex_cfg,
+        "hugepages": huge_info,
+        "trex_connected": engine.trex_connected,
+        "trex_daemon_mode": engine.trex_daemon_mode,
+        "trex_version": engine.trex_server_version,
+        "trex_system_info": engine.trex_system_info,
+    }
+
+
+@app.get("/api/topology")
+async def get_unified_topology():
+    """Return unified R640 + TRex Ports + UniFi EFG + Switches + APs + Clients + ARP topology model."""
+    hw = await asyncio.to_thread(engine.get_hardware_snapshot, False)
+    neighbors = await asyncio.to_thread(diag.scan_local_neighbors)
+    u_snap = unifi_collector.latest_snapshot
+    s_snap = snmp_collector.latest_snapshot
+
+    gw_neighbor = next((n for n in neighbors if n.get("ip") == "10.20.30.1"), None)
+    return {
+        "r640": {
+            "name": "Dell PowerEdge R640",
+            "management_ip": "10.20.30.237",
+            "management_interface": hw.get("management_interface", "enp216s0"),
+            "trex_connected": engine.trex_connected,
+            "trex_version": engine.trex_server_version,
+            "trex_daemon_mode": engine.trex_daemon_mode,
+            "interfaces": hw.get("interfaces", []),
+        },
+        "topology_assessment": hw.get("topology_assessment", {}),
+        "discovered_gateway": {
+            "ip": "10.20.30.1",
+            "mac": (gw_neighbor or {}).get("mac", "e4:38:83:8d:a5:88"),
+            "vendor": "Ubiquiti Inc. (UniFi Gateway)",
+            "reachable": gw_neighbor is not None,
+        },
+        "unifi": {
+            "connected": bool(u_snap.get("connected")),
+            "status": u_snap.get("status"),
+            "gateways": u_snap.get("gateways", []),
+            "switches": u_snap.get("switches", []),
+            "access_points": u_snap.get("access_points", []),
+            "clients_count": (u_snap.get("summary") or {}).get("active_clients"),
+            "summary": u_snap.get("summary") or {},
+        },
+        "snmp": {
+            "connected": bool(s_snap.get("connected")),
+            "sys_name": s_snap.get("sys_name"),
+            "interfaces": s_snap.get("interfaces", []),
+        },
+        "arp_neighbors": neighbors,
+    }
+
+
+@app.post("/api/config/trex")
+async def configure_trex(payload: Dict[str, Any]):
+    daemon_mode = payload.get("daemon_mode")  # 'ASTF' | 'STL'
+    if daemon_mode and str(daemon_mode).upper() in ("ASTF", "STL"):
+        if engine.running:
+            await asyncio.to_thread(engine.stop_test, "stopped_for_mode_switch")
+        ok = await asyncio.to_thread(engine.ensure_trex_daemon_mode, str(daemon_mode).upper())
+        await asyncio.to_thread(
+            db.log_audit,
+            "TRex Engine",
+            "Switched TRex Daemon Mode",
+            str(daemon_mode).upper(),
+            f"Connected={ok}",
+        )
+        if not payload.get("regenerate_yaml"):
+            return {"status": "switched" if ok else "error", "trex_daemon_mode": engine.trex_daemon_mode, "trex_connected": engine.trex_connected}
+
+    mode = payload.get("mode", "auto")
+    port0 = payload.get("port0")
+    port1 = payload.get("port1")
+    restart_service = bool(payload.get("restart_service", True))
+
+    disc = await asyncio.to_thread(discover_interfaces)
+    res = await asyncio.to_thread(generate_trex_cfg, disc, mode, port0, port1)
+    if restart_service:
+        subprocess.run(["systemctl", "restart", "trex-server.service"], check=False)
+        await asyncio.sleep(2.0)
+        await asyncio.to_thread(engine.try_connect_trex)
+    await asyncio.to_thread(db.log_audit, "TRex Engine", "Updated /etc/trex_cfg.yaml", f"Mode={mode}", f"Ports={res.get('ports')}")
+    return {**res, "trex_connected": engine.trex_connected, "trex_daemon_mode": engine.trex_daemon_mode}
+
+
+# ---------------------------------------------------------------------------
+# Schedules, Settings, User Access & Audit Logs
+# ---------------------------------------------------------------------------
 @app.get("/api/schedules")
 async def get_schedules():
     return {"schedules": await asyncio.to_thread(db.list_scheduled_jobs)}
@@ -525,46 +774,33 @@ async def get_schedules():
 @app.post("/api/schedules")
 async def add_schedule(payload: Dict[str, Any]):
     job_id = await asyncio.to_thread(db.create_scheduled_job, payload)
+    await asyncio.to_thread(db.log_audit, "Test Scheduler", "Created Scheduled Job", payload.get("name", ""), f"Cron={payload.get('cron_expr')}")
     return {"id": job_id, "status": "created"}
 
 
 @app.delete("/api/schedules/{job_id}")
 async def remove_schedule(job_id: int):
     ok = await asyncio.to_thread(db.delete_scheduled_job, job_id)
+    if ok:
+        await asyncio.to_thread(db.log_audit, "Test Scheduler", "Deleted Scheduled Job", f"Job #{job_id}", "")
     return {"deleted": ok}
-
-
-@app.post("/api/config/trex")
-async def configure_trex(payload: Dict[str, Any]):
-    mode = payload.get("mode", "auto")
-    port0 = payload.get("port0")
-    port1 = payload.get("port1")
-    restart_service = bool(payload.get("restart_service", False))
-
-    disc = await asyncio.to_thread(discover_interfaces)
-    res = await asyncio.to_thread(generate_trex_cfg, disc, mode, port0, port1)
-    if restart_service:
-        subprocess.run(["systemctl", "restart", "trex-server.service"], check=False)
-        await asyncio.sleep(1.5)
-        await asyncio.to_thread(engine.try_connect_trex)
-    return res
 
 
 @app.get("/api/config/settings")
 async def get_appliance_settings():
     saved = await asyncio.to_thread(db.get_setting, "ui_config", {})
-    return {
-        "settings": saved or {
-            "appliance_name": "Stephan Van Vuuren's Network Tester",
-            "site_label": "Portable R640 Field Unit (DHCP)",
-            "default_link_capacity_mbps": 10000,
-            "safety_watchdog_enabled": True,
-            "safety_max_drop_pct": 15.0,
-            "protect_mgmt_nic": True,
-            "lcd_ip_display": True,
-            "mdns_hostname": "stephan-tester.local",
-        }
+    defaults = {
+        "appliance_name": "Cisco TRex Network Test Studio",
+        "organization_name": "Stephan Van Vuuren — Network Engineering Lab",
+        "dut_default_name": "UniFi Enterprise Fortress Gateway (EFG)",
+        "default_link_capacity_mbps": 10000,
+        "default_traffic_engine": "trex_astf",
+        "safety_watchdog_enabled": True,
+        "safety_max_drop_pct": 15.0,
+        "protect_mgmt_nic": True,
+        "operator_name": "Stephan Van Vuuren",
     }
+    return {"settings": {**defaults, **(saved or {})}}
 
 
 @app.post("/api/config/settings")
@@ -572,10 +808,40 @@ async def save_appliance_settings(payload: Dict[str, Any]):
     await asyncio.to_thread(db.set_setting, "ui_config", payload)
     if payload.get("default_link_capacity_mbps"):
         engine.link_capacity_mbps = int(payload["default_link_capacity_mbps"])
+    await asyncio.to_thread(db.log_audit, "Administration", "Updated Appliance Settings", payload.get("appliance_name", ""), "")
     return {"status": "saved", "settings": payload}
 
 
-# Field Diagnostics Suite Endpoints
+@app.get("/api/admin/users")
+async def get_admin_users():
+    return {"users": await asyncio.to_thread(db.list_users)}
+
+
+@app.post("/api/admin/users")
+async def create_admin_user(payload: Dict[str, Any]):
+    if not payload.get("username") or not payload.get("display_name"):
+        raise HTTPException(status_code=400, detail="Username and display name are required")
+    uid = await asyncio.to_thread(db.add_user_account, payload)
+    await asyncio.to_thread(db.log_audit, "User Access", "Added Operator Profile", payload["username"], f"Role={payload.get('role', 'Operator')}")
+    return {"id": uid, "status": "created"}
+
+
+@app.delete("/api/admin/users/{user_id}")
+async def remove_admin_user(user_id: int):
+    ok = await asyncio.to_thread(db.delete_user_account, user_id)
+    if ok:
+        await asyncio.to_thread(db.log_audit, "User Access", "Removed Operator Profile", f"User #{user_id}", "")
+    return {"deleted": ok}
+
+
+@app.get("/api/admin/audit-logs")
+async def get_audit_logs(limit: int = Query(200, ge=1, le=1000)):
+    return {"logs": await asyncio.to_thread(db.list_audit_logs, limit)}
+
+
+# ---------------------------------------------------------------------------
+# Preserved Field Diagnostics & Auto-Deploy Endpoints
+# ---------------------------------------------------------------------------
 @app.post("/api/diagnostics/mtu")
 async def diag_mtu(payload: Dict[str, Any]):
     target = payload.get("target", "")
@@ -584,8 +850,8 @@ async def diag_mtu(payload: Dict[str, Any]):
 
 @app.post("/api/diagnostics/dns-gateway")
 async def diag_dns_gw(payload: Dict[str, Any]):
-    dns_srv = payload.get("dns_server", "8.8.8.8")
-    domain = payload.get("domain", "google.com")
+    dns_srv = payload.get("dns_server", "1.1.1.1")
+    domain = payload.get("domain", "cloudflare.com")
     return await asyncio.to_thread(diag.benchmark_dns_and_gateway, dns_srv, domain)
 
 
@@ -593,10 +859,7 @@ async def diag_dns_gw(payload: Dict[str, Any]):
 async def diag_neighbors():
     neigh = await asyncio.to_thread(diag.scan_local_neighbors)
     hw = await asyncio.to_thread(engine.get_hardware_snapshot)
-    return {
-        "arp_neighbors": neigh,
-        "interfaces": hw.get("interfaces", []),
-    }
+    return {"arp_neighbors": neigh, "interfaces": hw.get("interfaces", [])}
 
 
 @app.post("/api/diagnostics/iperf3")
@@ -611,11 +874,7 @@ async def diag_iperf3(payload: Dict[str, Any]):
 @app.get("/api/diagnostics/pcap")
 async def diag_pcap(interface: str = Query("enp216s0"), count: int = Query(150)):
     pcap_path = await asyncio.to_thread(diag.capture_pcap_sample, interface, count, 3)
-    return FileResponse(
-        path=str(pcap_path),
-        media_type="application/vnd.tcpdump.pcap",
-        filename=pcap_path.name,
-    )
+    return FileResponse(path=str(pcap_path), media_type="application/vnd.tcpdump.pcap", filename=pcap_path.name)
 
 
 @app.get("/api/system/git-status")
@@ -634,4 +893,3 @@ async def git_status():
 async def git_pull_now():
     subprocess.Popen(["/opt/stephan-network-tester/scripts/auto_deploy.sh", "--once"])
     return {"status": "triggered", "message": "Pulling latest origin/main from GitHub and reloading..."}
-

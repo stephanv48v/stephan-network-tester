@@ -1,2111 +1,549 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Stephan Van Vuuren's Network Tester | Dell PowerEdge R640 Appliance</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <title>Cisco TRex Network Test Studio — Dell PowerEdge R640</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          fontFamily: {
-            sans: ['Inter', 'system-ui', 'sans-serif'],
-            mono: ['JetBrains Mono', 'monospace'],
-          },
-          colors: {
-            cyber: {
-              bg: '#060911',
-              card: '#0D1322',
-              border: '#1E293B',
-              cyan: '#00E5FF',
-              emerald: '#10B981',
-              rose: '#F43F5E',
-              amber: '#F59E0B',
-              violet: '#8B5CF6',
-            }
-          }
-        }
-      }
-    }
-  </script>
-  <style>
-    body {
-      background-color: #060911;
-      color: #F8FAFC;
-      background-image:
-        radial-gradient(circle at 12% 10%, rgba(0, 229, 255, 0.07), transparent 28%),
-        radial-gradient(circle at 88% 15%, rgba(139, 92, 246, 0.07), transparent 30%),
-        linear-gradient(to bottom, #060911, #090D18);
-      min-height: 100vh;
-      overflow-x: hidden;
-    }
-    .glass-card {
-      background: rgba(13, 19, 34, 0.88);
-      backdrop-filter: blur(12px);
-      border: 1px solid rgba(30, 41, 59, 0.9);
-      box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.6);
-    }
-    .neon-cyan-glow {
-      box-shadow: 0 0 20px rgba(0, 229, 255, 0.25);
-    }
-    .neon-green-glow {
-      box-shadow: 0 0 22px rgba(16, 185, 129, 0.35);
-    }
-    .neon-red-glow {
-      box-shadow: 0 0 25px rgba(244, 63, 94, 0.45);
-    }
-    @keyframes flowDash {
-      to { stroke-dashoffset: -48; }
-    }
-    .svg-flow-line {
-      stroke-dasharray: 8 8;
-      animation: flowDash 0.8s linear infinite;
-    }
-    @keyframes ledPulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.45; transform: scale(0.92); }
-    }
-    .led-blink {
-      animation: ledPulse 0.65s ease-in-out infinite;
-    }
-    input[type="range"] {
-      accent-color: #00E5FF;
-    }
-    ::-webkit-scrollbar { width: 8px; height: 8px; }
-    ::-webkit-scrollbar-track { background: #090D18; }
-    ::-webkit-scrollbar-thumb { background: #1E293B; border-radius: 4px; }
-    ::-webkit-scrollbar-thumb:hover { background: #334155; }
-  </style>
+  <link rel="stylesheet" href="/static/styles.css?v=4.0" />
 </head>
 <body>
-  <div id="root"></div>
+  <div class="app-shell">
+    <!-- ==================================================================
+         LEFT ENTERPRISE SIDEBAR (#142338) — ALL 20 STRUCTURED ROUTES
+         ================================================================== -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="cisco-bars" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <div>
+          <div class="brand-text-title">CISCO TRex</div>
+          <div class="brand-text-sub">Network Test Studio</div>
+        </div>
+      </div>
 
-  <script type="text/babel">
-    const { useState, useEffect, useRef, useMemo } = React;
+      <nav class="sidebar-nav" id="sidebarNav">
+        <!-- 1. Overview -->
+        <div class="nav-group">
+          <div class="nav-group-header">Overview</div>
+          <button class="nav-item active" data-route="dashboard">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5L12 3l9 7.5V21a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-10.5z"/></svg>
+            <span>Dashboard</span>
+          </button>
+          <button class="nav-item" data-route="live-monitoring">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            <span>Live Monitoring</span>
+          </button>
+        </div>
 
-    function formatBps(bps) {
-      if (!bps || bps <= 0) return { val: "0.00", unit: "Mbps", full: "0.00 Mbps" };
-      if (bps >= 1e9) return { val: (bps / 1e9).toFixed(2), unit: "Gbps", full: `${(bps / 1e9).toFixed(2)} Gbps` };
-      if (bps >= 1e6) return { val: (bps / 1e6).toFixed(1), unit: "Mbps", full: `${(bps / 1e6).toFixed(1)} Mbps` };
-      if (bps >= 1e3) return { val: (bps / 1e3).toFixed(1), unit: "Kbps", full: `${(bps / 1e3).toFixed(1)} Kbps` };
-      return { val: bps.toFixed(0), unit: "bps", full: `${bps.toFixed(0)} bps` };
-    }
+        <!-- 2. Test Studio -->
+        <div class="nav-group">
+          <div class="nav-group-header">Test Studio</div>
+          <button class="nav-item" data-route="quick-test">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <span>Quick Test</span>
+          </button>
+          <button class="nav-item" data-route="traffic-mix-builder">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+            <span>Traffic Mix Builder</span>
+          </button>
+          <button class="nav-item" data-route="application-simulation">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
+            <span>Application Simulation</span>
+          </button>
+          <button class="nav-item" data-route="traffic-profiles">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <span>Traffic Profiles</span>
+          </button>
+          <button class="nav-item" data-route="rfc2544-benchmark">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+            <span>RFC 2544 / Benchmark</span>
+          </button>
+          <button class="nav-item" data-route="stress-soak">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+            <span>Stress &amp; Soak Testing</span>
+          </button>
+          <button class="nav-item" data-route="test-scheduler">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            <span>Test Scheduler</span>
+          </button>
+        </div>
 
-    function formatPps(pps) {
-      if (!pps || pps <= 0) return { val: "0.0", unit: "kpps", full: "0 kpps" };
-      if (pps >= 1e6) return { val: (pps / 1e6).toFixed(2), unit: "Mpps", full: `${(pps / 1e6).toFixed(2)} Mpps` };
-      if (pps >= 1e3) return { val: (pps / 1e3).toFixed(1), unit: "kpps", full: `${(pps / 1e3).toFixed(1)} kpps` };
-      return { val: pps.toFixed(0), unit: "pps", full: `${pps.toFixed(0)} pps` };
-    }
+        <!-- 3. Results -->
+        <div class="nav-group">
+          <div class="nav-group-header">Results</div>
+          <button class="nav-item" data-route="test-history">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/></svg>
+            <span>Test History</span>
+          </button>
+          <button class="nav-item" data-route="compare-tests">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="18" rx="1"/><rect x="13" y="3" width="8" height="18" rx="1"/></svg>
+            <span>Compare Tests</span>
+          </button>
+          <button class="nav-item" data-route="reports-exports">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span>Reports &amp; Exports</span>
+          </button>
+        </div>
 
-    const TRAFFIC_TYPES_META = [
-      { key: "web_https", label: "Web & Cloud SaaS", sub: "HTTP/2, TLS 1.3, REST APIs", color: "#00E5FF", icon: "🌐" },
-      { key: "video_streaming", label: "4K Video & CCTV", sub: "RTSP Cameras, HLS, RTP Video", color: "#10B981", icon: "📹" },
-      { key: "voip_rtp", label: "VoIP & Teams/Zoom", sub: "SIP + G.711 RTP (DSCP EF 46)", color: "#F59E0B", icon: "📞" },
-      { key: "file_smb", label: "SMB / SAN / Backups", sub: "1518B-9000B Elephant Flows", color: "#8B5CF6", icon: "💾" },
-      { key: "dns_control", label: "DNS / DHCP / ARP", sub: "Control-Plane & Lookups", color: "#EC4899", icon: "🧭" },
-      { key: "gaming_udp", label: "Real-Time Gaming UDP", sub: "High Tick-Rate Low-Latency", color: "#38BDF8", icon: "🎮" },
-    ];
+        <!-- 4. Infrastructure -->
+        <div class="nav-group">
+          <div class="nav-group-header">Infrastructure</div>
+          <button class="nav-item" data-route="unifi-monitoring">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8 9v5a4 4 0 0 0 8 0V9"/></svg>
+            <span>UniFi Stack Monitoring</span>
+          </button>
+          <button class="nav-item" data-route="network-topology">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="2" width="6" height="5" rx="1"/><rect x="2" y="17" width="6" height="5" rx="1"/><rect x="16" y="17" width="6" height="5" rx="1"/><path d="M12 7v5m-7 5v-3a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v3"/></svg>
+            <span>Network Topology</span>
+          </button>
+          <button class="nav-item" data-route="nics-ports">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6" y2="14"/><line x1="10" y1="10" x2="10" y2="14"/><line x1="14" y1="10" x2="14" y2="14"/><line x1="18" y1="10" x2="18" y2="14"/></svg>
+            <span>NICs &amp; Ports</span>
+          </button>
+          <button class="nav-item" data-route="trex-engine">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/></svg>
+            <span>TRex Engine</span>
+          </button>
+          <button class="nav-item" data-route="server-health">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+            <span>Server Health</span>
+          </button>
+        </div>
 
-    /* Custom Branded SVG Logo for Stephan Van Vuuren's Network Tester */
-    function BrandLogoSVG() {
-      return (
-        <svg viewBox="0 0 56 56" className="w-12 h-12 flex-shrink-0">
-          <defs>
-            <linearGradient id="svvGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#00E5FF" />
-              <stop offset="50%" stopColor="#3B82F6" />
-              <stop offset="100%" stopColor="#10B981" />
-            </linearGradient>
-          </defs>
-          <polygon points="28,3 51,16 51,40 28,53 5,40 5,16" fill="#0B1325" stroke="url(#svvGrad)" strokeWidth="2.5" />
-          <path d="M14 34 L22 22 L29 30 L40 16" fill="none" stroke="#00E5FF" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-          <circle cx="14" cy="34" r="3" fill="#00E5FF" />
-          <circle cx="22" cy="22" r="3" fill="#3B82F6" />
-          <circle cx="29" cy="30" r="3" fill="#10B981" />
-          <circle cx="40" cy="16" r="3.5" fill="#F59E0B" />
-          <text x="28" y="45" textAnchor="middle" fill="#E2E8F0" fontSize="8.5" fontWeight="800" fontFamily="JetBrains Mono">SVV-10G</text>
-        </svg>
-      );
-    }
+        <!-- 5. Administration -->
+        <div class="nav-group">
+          <div class="nav-group-header">Administration</div>
+          <button class="nav-item" data-route="configuration">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span>Configuration</span>
+          </button>
+          <button class="nav-item" data-route="api-integrations">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            <span>API Integrations</span>
+          </button>
+          <button class="nav-item" data-route="user-access">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            <span>User Access</span>
+          </button>
+          <button class="nav-item" data-route="audit-logs">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+            <span>Audit Logs</span>
+          </button>
+        </div>
+      </nav>
 
-    /* Interactive Animated Network Topology & Dell PowerEdge R640 SVG Visualizer */
-    function AnimatedNetworkTopologySVG({ telemetry, simulatedUsers, simulatedDevices, protocolMix, onSelectNic }) {
-      const running = Boolean(telemetry?.running);
-      const ratePct = telemetry?.rate_pct || 0;
-      const txFormatted = formatBps(telemetry?.tx_bps || 0);
-      const ppsFormatted = formatPps(telemetry?.tx_pps || 0);
-      const dropPct = telemetry?.drop_pct || 0;
-      const interfaces = telemetry?.interfaces || [];
-      const physNics = interfaces.filter(i => i.pci_address !== 'virtual');
+      <div class="sidebar-footer">
+        <div style="font-weight:600;color:#E2E8F0;" id="sbHostIp">Host: 10.20.30.237</div>
+        <div id="sbWsStatus" style="margin-top:2px;">Telemetry: Connecting...</div>
+      </div>
+    </aside>
 
-      return (
-        <div className="glass-card rounded-2xl p-4 border border-slate-800">
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-            <div className="flex items-center gap-2">
-              <span className={`w-2.5 h-2.5 rounded-full ${running ? 'bg-emerald-400 led-blink' : 'bg-cyan-400'}`}></span>
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                Live Hardware & Virtual Traffic Topology — Dell PowerEdge R640 (1x 10GbE + 4x 1GbE)
-              </h3>
-            </div>
-            <div className="flex items-center gap-4 text-xs font-mono text-slate-400">
-              <span>Users: <strong className="text-cyan-400">{simulatedUsers.toLocaleString()}</strong></span>
-              <span>Devices: <strong className="text-emerald-400">{simulatedDevices.toLocaleString()}</strong></span>
-              <span>Frame Size: <strong className="text-amber-400">{telemetry?.frame_size || 354} B</strong></span>
-              <span>Link Target: <strong className="text-purple-400">{(telemetry?.link_capacity_mbps || 10000) >= 1000 ? `${(telemetry?.link_capacity_mbps || 10000)/1000} Gbps` : `${telemetry?.link_capacity_mbps} Mbps`}</strong></span>
+    <!-- ==================================================================
+         MAIN CONTENT AREA
+         ================================================================== -->
+    <div class="main-area">
+      <!-- Top Enterprise Header Bar -->
+      <header class="topbar">
+        <div class="topbar-title-block">
+          <h1 id="topbarTitle">Cisco TRex Network Test Studio</h1>
+          <p id="topbarSubtitle">Traffic Generation &bull; 10,000-User EFG Performance Testing &bull; UniFi Stack Monitoring</p>
+        </div>
+
+        <div class="topbar-right">
+          <!-- Emergency Stop Quick Button (visible whenever test is running) -->
+          <button class="btn btn-danger btn-sm" id="hdrEmergencyStop" style="display:none;" onclick="App.stopActiveTest('emergency_stopped')">
+            &#9632; Emergency Stop
+          </button>
+
+          <!-- TRex Status Pill -->
+          <div class="status-chip" onclick="App.navigate('trex-engine')" style="cursor:pointer;" title="Inspect Cisco TRex Engine">
+            <span class="status-chip-dot" id="hdrTrexDot"></span>
+            <div>
+              <div class="status-chip-label">TRex Engine</div>
+              <div class="status-chip-sub" id="hdrTrexSub">Running &bull; ASTF DPDK</div>
             </div>
           </div>
 
-          <svg viewBox="0 0 1050 225" className="w-full h-auto select-none">
-            <defs>
-              <linearGradient id="pipeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stopColor="#00E5FF" stopOpacity="0.85" />
-                <stop offset="50%" stopColor="#10B981" stopOpacity="0.9" />
-                <stop offset="100%" stopColor={dropPct > 0.5 ? "#F43F5E" : "#8B5CF6"} stopOpacity="0.9" />
-              </linearGradient>
-              <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-                <feGaussianBlur stdDeviation="3" result="blur" />
-                <feComposite in="SourceGraphic" in2="blur" operator="over" />
-              </filter>
-            </defs>
+          <!-- Hardware Pill -->
+          <div class="status-chip" onclick="App.navigate('server-health')" style="cursor:pointer;" title="Inspect Dell PowerEdge R640">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1769D2" stroke-width="2"><rect x="2" y="3" width="20" height="7" rx="1"/><rect x="2" y="14" width="20" height="7" rx="1"/><circle cx="6" cy="6.5" r="1"/><circle cx="6" cy="17.5" r="1"/></svg>
+            <div>
+              <div class="status-chip-label">Dell PowerEdge R640</div>
+              <div class="status-chip-sub" id="hdrHwSub">2 &times; Xeon | 500 GB RAM</div>
+            </div>
+          </div>
 
-            {/* LEFT NODE: Virtual Users & Devices Pool */}
-            <rect x="12" y="18" width="235" height="188" rx="14" fill="#0B1120" stroke="#1E293B" strokeWidth="2" />
-            <text x="28" y="42" fill="#00E5FF" fontSize="11" fontWeight="700" fontFamily="Inter">SIMULATED USERS & DEVICES</text>
+          <!-- Alerts Button -->
+          <button class="icon-btn" onclick="App.showAlertsModal()" title="System &amp; Link Alerts">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            <span class="notif-badge" id="hdrAlertCount" style="display:none;">0</span>
+          </button>
 
-            {/* User & Device SVG Icons & Counts */}
-            <g transform="translate(28, 56)">
-              <rect x="0" y="0" width="96" height="54" rx="8" fill="#111827" stroke="#00E5FF" strokeOpacity="0.4" />
-              <text x="12" y="21" fill="#94A3B8" fontSize="9.5" fontWeight="600">VIRTUAL USERS</text>
-              <text x="12" y="42" fill="#F8FAFC" fontSize="15" fontWeight="800" fontFamily="JetBrains Mono">{simulatedUsers.toLocaleString()}</text>
-
-              <rect x="106" y="0" width="98" height="54" rx="8" fill="#111827" stroke="#10B981" strokeOpacity="0.4" />
-              <text x="116" y="21" fill="#94A3B8" fontSize="9.5" fontWeight="600">ENDPOINTS / MACs</text>
-              <text x="116" y="42" fill="#10B981" fontSize="15" fontWeight="800" fontFamily="JetBrains Mono">{simulatedDevices.toLocaleString()}</text>
-            </g>
-
-            {/* Mini Traffic Mix Bars inside Left Node */}
-            <g transform="translate(28, 122)">
-              <text x="0" y="10" fill="#64748B" fontSize="9" fontWeight="700">ACTIVE APPLICATION STREAMS</text>
-              {TRAFFIC_TYPES_META.slice(0, 4).map((t, idx) => {
-                const pct = Math.round(protocolMix?.[t.key] ?? 20);
-                return (
-                  <g key={t.key} transform={`translate(0, ${18 + idx * 14})`}>
-                    <text x="0" y="9" fill="#CBD5E1" fontSize="8.5" fontFamily="Inter">{t.label.split(' ')[0]}</text>
-                    <rect x="58" y="2" width="115" height="6" rx="3" fill="#1E293B" />
-                    <rect x="58" y="2" width={Math.max(3, (pct / 100) * 115)} height="6" rx="3" fill={t.color} />
-                    <text x="180" y="9" fill="#94A3B8" fontSize="8.5" fontFamily="JetBrains Mono">{pct}%</text>
-                  </g>
-                );
-              })}
-            </g>
-
-            {/* ANIMATED PIPE 1: Users Pool -> R640 TRex Engine */}
-            <line x1="247" y1="112" x2="345" y2="112" stroke="#1E293B" strokeWidth="10" strokeLinecap="round" />
-            <line
-              x1="247" y1="112" x2="345" y2="112"
-              stroke="url(#pipeGrad)"
-              strokeWidth={running ? Math.max(3, Math.min(9, (ratePct / 100) * 9)) : 2}
-              className={running ? "svg-flow-line" : ""}
-            />
-            <text x="296" y="96" textAnchor="middle" fill="#00E5FF" fontSize="9.5" fontWeight="700" fontFamily="JetBrains Mono">
-              {running ? `${ratePct.toFixed(0)}% LOAD` : "STANDBY"}
-            </text>
-
-            {/* CENTER NODE: Dell PowerEdge R640 Rear-Panel Bezel & NIC Ports */}
-            <rect x="345" y="14" width="385" height="196" rx="14" fill="#0D1527" stroke="#334155" strokeWidth="2" />
-            <rect x="357" y="24" width="361" height="26" rx="6" fill="#111C35" />
-            <text x="369" y="41" fill="#F8FAFC" fontSize="11" fontWeight="800" fontFamily="Inter">
-              DELL POWEREDGE R640 — REAR NIC BAY
-            </text>
-            <text x="706" y="41" textAnchor="end" fill="#10B981" fontSize="9.5" fontWeight="700" fontFamily="JetBrains Mono">
-              {telemetry?.trex_connected ? "TREX ZMQ ONLINE" : "TREX READY"}
-            </text>
-
-            {/* Render the 5 Physical NIC Ports as realistic RJ45 / 10GbE Server Jacks */}
-            {(physNics.length > 0 ? physNics : [
-              { ifname: 'enp216s0', max_speed_mbps: 10000, operstate: 'UP', speed_mbps: 100, is_management: true, ipv4: ['10.20.30.237/24'] },
-              { ifname: 'eno1', max_speed_mbps: 1000, operstate: 'DOWN', speed_mbps: 0 },
-              { ifname: 'eno2', max_speed_mbps: 1000, operstate: 'DOWN', speed_mbps: 0 },
-              { ifname: 'eno3', max_speed_mbps: 1000, operstate: 'DOWN', speed_mbps: 0 },
-              { ifname: 'eno4', max_speed_mbps: 1000, operstate: 'DOWN', speed_mbps: 0 },
-            ]).slice(0, 5).map((nic, idx) => {
-              const xPos = 362 + idx * 71;
-              const isUp = nic.operstate === 'UP' || nic.link_detected;
-              const is10G = (nic.max_speed_mbps || 0) >= 10000;
-              const ledColor = isUp ? (running ? "#00E5FF" : "#10B981") : "#EF4444";
-              return (
-                <g
-                  key={nic.ifname}
-                  transform={`translate(${xPos}, 60)`}
-                  className="cursor-pointer"
-                  onClick={() => onSelectNic && onSelectNic(nic)}
-                >
-                  <rect
-                    x="0" y="0" width="64" height="84" rx="8"
-                    fill={is10G ? "#131F3A" : "#0F172A"}
-                    stroke={isUp ? (is10G ? "#00E5FF" : "#10B981") : "#334155"}
-                    strokeWidth={is10G ? "2" : "1.5"}
-                  />
-                  {/* Port LEDs */}
-                  <circle cx="14" cy="13" r="4" fill={ledColor} className={isUp && running ? "led-blink" : ""} />
-                  <circle cx="50" cy="13" r="3.5" fill={is10G ? "#F59E0B" : "#64748B"} />
-                  {/* RJ45 Metallic Cutout */}
-                  <rect x="13" y="23" width="38" height="26" rx="3" fill="#060911" stroke="#475569" strokeWidth="1.2" />
-                  <line x1="21" y1="24" x2="21" y2="33" stroke="#F59E0B" strokeWidth="1.5" />
-                  <line x1="27" y1="24" x2="27" y2="33" stroke="#F59E0B" strokeWidth="1.5" />
-                  <line x1="33" y1="24" x2="33" y2="33" stroke="#F59E0B" strokeWidth="1.5" />
-                  <line x1="39" y1="24" x2="39" y2="33" stroke="#F59E0B" strokeWidth="1.5" />
-                  <line x1="45" y1="24" x2="45" y2="33" stroke="#F59E0B" strokeWidth="1.5" />
-
-                  <text x="32" y="62" textAnchor="middle" fill="#F8FAFC" fontSize="9.5" fontWeight="700" fontFamily="JetBrains Mono">
-                    {nic.ifname}
-                  </text>
-                  <text x="32" y="75" textAnchor="middle" fill={is10G ? "#00E5FF" : "#94A3B8"} fontSize="8" fontWeight="700">
-                    {is10G ? "10GbE NIC" : "1GbE I350"}
-                  </text>
-                </g>
-              );
-            })}
-
-            {/* Bottom bar inside R640 Node showing CPU / RAM / HugePages */}
-            <rect x="362" y="154" width="353" height="42" rx="8" fill="#090E1A" stroke="#1E293B" />
-            <text x="376" y="172" fill="#94A3B8" fontSize="9.5" fontFamily="JetBrains Mono">
-              CPU: <tspan fill="#00E5FF" fontWeight="700">{telemetry?.cpu_pct ?? 0}%</tspan> (32T Xeon)
-            </text>
-            <text x="515" y="172" fill="#94A3B8" fontSize="9.5" fontFamily="JetBrains Mono">
-              RAM: <tspan fill="#10B981" fontWeight="700">{telemetry?.ram_used_gb ?? 3.5} / {telemetry?.ram_total_gb ?? 499} GB</tspan>
-            </text>
-            <text x="376" y="188" fill="#64748B" fontSize="8.5" fontFamily="JetBrains Mono">
-              DHCP MGMT: {telemetry?.management_interface || 'enp216s0'} (10.20.30.237) • Protected from DPDK Unbind
-            </text>
-
-            {/* ANIMATED PIPE 2: R640 -> Switch / Network Under Test */}
-            <line x1="730" y1="112" x2="828" y2="112" stroke="#1E293B" strokeWidth="12" strokeLinecap="round" />
-            <line
-              x1="730" y1="112" x2="828" y2="112"
-              stroke="url(#pipeGrad)"
-              strokeWidth={running ? Math.max(4, Math.min(10, (ratePct / 100) * 10)) : 2}
-              className={running ? "svg-flow-line" : ""}
-            />
-            <text x="779" y="92" textAnchor="middle" fill="#10B981" fontSize="10" fontWeight="800" fontFamily="JetBrains Mono">
-              {txFormatted.full}
-            </text>
-            <text x="779" y="136" textAnchor="middle" fill="#94A3B8" fontSize="9" fontFamily="JetBrains Mono">
-              {ppsFormatted.full}
-            </text>
-
-            {/* RIGHT NODE: Target Network / Switch / Firewall Under Test */}
-            <rect x="828" y="18" width="210" height="188" rx="14" fill="#0B1120" stroke={dropPct > 1.0 ? "#F43F5E" : "#1E293B"} strokeWidth="2" />
-            <text x="844" y="42" fill="#F8FAFC" fontSize="11" fontWeight="700">NETWORK UNDER TEST</text>
-
-            <g transform="translate(844, 54)">
-              <rect x="0" y="0" width="178" height="42" rx="7" fill="#111827" />
-              <text x="10" y="16" fill="#94A3B8" fontSize="9">END-TO-END LATENCY / JITTER</text>
-              <text x="10" y="34" fill="#F59E0B" fontSize="13.5" fontWeight="800" fontFamily="JetBrains Mono">
-                {(telemetry?.lat_avg_us || 0).toFixed(1)} us <tspan fill="#A855F7" fontSize="11">±{(telemetry?.jitter_us || 0).toFixed(1)} us</tspan>
-              </text>
-
-              <rect x="0" y="49" width="178" height="42" rx="7" fill="#111827" />
-              <text x="10" y="65" fill="#94A3B8" fontSize="9">PACKET LOSS / DROPS</text>
-              <text x="10" y="83" fill={dropPct > 0.5 ? "#F43F5E" : "#10B981"} fontSize="13.5" fontWeight="800" fontFamily="JetBrains Mono">
-                {dropPct.toFixed(3)}% ({(telemetry?.dropped_packets || 0).toLocaleString()})
-              </text>
-
-              <rect x="0" y="98" width="178" height="42" rx="7" fill="#111827" />
-              <text x="10" y="114" fill="#94A3B8" fontSize="9">VOIP CALL QUALITY (MOS)</text>
-              <text x="10" y="132" fill="#00E5FF" fontSize="13.5" fontWeight="800" fontFamily="JetBrains Mono">
-                {(telemetry?.mos_score || 4.45).toFixed(2)} / 4.50 <tspan fill="#10B981" fontSize="10">{(telemetry?.mos_score || 4.45) >= 4.0 ? "HD VOICE" : "DEGRADED"}</tspan>
-              </text>
-            </g>
-          </svg>
+          <!-- Operator Identity -->
+          <div class="operator-pill">
+            <div class="operator-avatar" id="hdrAvatar">SV</div>
+            <div>
+              <div class="status-chip-label" id="hdrOperatorName">Stephan Van Vuuren</div>
+              <div class="status-chip-sub">Lab Administrator</div>
+            </div>
+          </div>
         </div>
-      );
-    }
+      </header>
 
-    /* Main Application Component */
-    function App() {
-      const [activeTab, setActiveTab] = useState("cockpit");
-      const [telemetry, setTelemetry] = useState(null);
-      const [wsConnected, setWsConnected] = useState(false);
-      const [profiles, setProfiles] = useState([]);
-      const [scalePresets, setScalePresets] = useState([]);
-      const [runs, setRuns] = useState([]);
-      const [schedules, setSchedules] = useState([]);
-      const [hardware, setHardware] = useState(null);
+      <!-- Scrollable Viewport -->
+      <main class="page-viewport" id="pageViewport">
 
-      // Selected Test Configuration State
-      const [selectedProfileId, setSelectedProfileId] = useState("imix");
-      const [testMode, setTestMode] = useState("continuous"); // continuous | timed | step_ramp
-      const [durationSec, setDurationSec] = useState(60);
-      const [ratePct, setRatePct] = useState(35);
-      const [simulatedUsers, setSimulatedUsers] = useState(500);
-      const [simulatedDevices, setSimulatedDevices] = useState(1250);
-      const [linkCapacityMbps, setLinkCapacityMbps] = useState(10000);
-      const [protocolMix, setProtocolMix] = useState({
-        web_https: 40,
-        video_streaming: 25,
-        voip_rtp: 15,
-        file_smb: 10,
-        dns_control: 5,
-        gaming_udp: 5,
-      });
+        <!-- ==============================================================
+             PAGE 1: OVERVIEW -> DASHBOARD
+             ============================================================== -->
+        <section class="page-section active" id="page-dashboard">
+          <!-- Sub-tabs matching reference UI -->
+          <div class="subtab-bar">
+            <button class="subtab-btn active" onclick="App.navigate('dashboard')">&#9432; Overview</button>
+            <button class="subtab-btn" onclick="App.navigate('live-monitoring')">&#128200; Test Details &amp; Flows</button>
+            <button class="subtab-btn" onclick="App.navigate('unifi-monitoring')">&#128225; UniFi Stack</button>
+            <button class="subtab-btn" onclick="App.navigate('network-topology')">&#128423; EFG Topology</button>
+            <button class="subtab-btn" onclick="App.navigate('server-health')">&#128187; System Health</button>
+          </div>
 
-      // Custom Packet Builder & Step-Ramp Config
-      const [customConfig, setCustomConfig] = useState({
-        frame_size: 512,
-        vlan_id: 0,
-        dscp: 46,
-        protocol: "UDP",
-        src_ip_start: "10.100.0.1",
-        src_ip_end: "10.100.31.254",
-        dst_ip_start: "10.200.0.1",
-        dst_ip_end: "10.200.15.254",
-        src_mac: "02:53:56:00:00:01",
-        dst_mac: "02:53:56:00:00:02",
-        target_ip: "",
-        target_port: 5060,
-        ramp_start_pct: 10,
-        ramp_step_pct: 15,
-        ramp_step_sec: 5,
-        ramp_max_pct: 100,
-      });
-
-      // Diagnostics & RFC 2544 State
-      const [rfcResult, setRfcResult] = useState(null);
-      const [rfcLoading, setRfcLoading] = useState(false);
-      const [mtuResult, setMtuResult] = useState(null);
-      const [dnsGwResult, setDnsGwResult] = useState(null);
-      const [iperfResult, setIperfResult] = useState(null);
-      const [diagTargetIp, setDiagTargetIp] = useState("10.20.30.1");
-      const [diagLoading, setDiagLoading] = useState(false);
-
-      // New Schedule Form
-      const [newJob, setNewJob] = useState({
-        name: "Overnight Campus Link Stress Test",
-        cron_expr: "0 2 * * *",
-        profile_id: "imix",
-        test_mode: "timed",
-        duration_sec: 120,
-        rate_pct: 60,
-        simulated_users: 1000,
-        simulated_devices: 2500,
-      });
-
-      // Appliance Settings State
-      const [settings, setSettings] = useState({
-        appliance_name: "Stephan Van Vuuren's Network Tester",
-        site_label: "Portable Dell R640 DHCP Appliance",
-        default_link_capacity_mbps: 10000,
-        safety_watchdog_enabled: true,
-        safety_max_drop_pct: 15.0,
-        protect_mgmt_nic: true,
-        lcd_ip_display: true,
-        mdns_hostname: "stephan-tester.local",
-      });
-      const [toast, setToast] = useState(null);
-
-      // ECharts instances and rolling 60-sample buffers
-      const tpChartRef = useRef(null);
-      const latChartRef = useRef(null);
-      const tpChartInstance = useRef(null);
-      const latChartInstance = useRef(null);
-      const historyRef = useRef({
-        labels: [],
-        txMbps: [],
-        rxMbps: [],
-        txKpps: [],
-        latAvg: [],
-        latMax: [],
-        jitter: [],
-        drops: [],
-      });
-
-      function showToast(msg, type = "info") {
-        setToast({ msg, type });
-        setTimeout(() => setToast(null), 4000);
-      }
-
-      async function fetchInitialData() {
-        try {
-          const [profRes, runsRes, schedRes, hwRes, setRes] = await Promise.all([
-            fetch("/api/profiles").then(r => r.json()),
-            fetch("/api/runs").then(r => r.json()),
-            fetch("/api/schedules").then(r => r.json()),
-            fetch("/api/hardware").then(r => r.json()),
-            fetch("/api/config/settings").then(r => r.json()),
-          ]);
-          if (profRes.profiles) setProfiles(profRes.profiles);
-          if (profRes.user_scale_presets) setScalePresets(profRes.user_scale_presets);
-          if (runsRes.runs) setRuns(runsRes.runs);
-          if (schedRes.schedules) setSchedules(schedRes.schedules);
-          if (hwRes) setHardware(hwRes);
-          if (setRes?.settings) setSettings(setRes.settings);
-        } catch (err) {
-          console.error("Initial load error:", err);
-        }
-      }
-
-      useEffect(() => {
-        fetchInitialData();
-      }, []);
-
-      // Connect to 250ms WebSocket Telemetry Stream
-      useEffect(() => {
-        let ws;
-        let retryTimer;
-        const connectWs = () => {
-          const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-          ws = new WebSocket(`${proto}//${window.location.host}/ws/telemetry`);
-          ws.onopen = () => setWsConnected(true);
-          ws.onclose = () => {
-            setWsConnected(false);
-            retryTimer = setTimeout(connectWs, 1500);
-          };
-          ws.onmessage = (evt) => {
-            try {
-              const data = JSON.parse(evt.data);
-              setTelemetry(data);
-              if (data.running && typeof data.rate_pct === "number") {
-                setRatePct(data.rate_pct);
-              }
-
-              // Push to rolling 60-point chart history
-              const h = historyRef.current;
-              const nowLabel = new Date().toLocaleTimeString([], { hour12: false, minute: "2-digit", second: "2-digit" });
-              h.labels.push(nowLabel);
-              h.txMbps.push(Number(((data.tx_bps || 0) / 1e6).toFixed(2)));
-              h.rxMbps.push(Number(((data.rx_bps || 0) / 1e6).toFixed(2)));
-              h.txKpps.push(Number(((data.tx_pps || 0) / 1e3).toFixed(2)));
-              h.latAvg.push(Number((data.lat_avg_us || 0).toFixed(1)));
-              h.latMax.push(Number((data.lat_max_us || 0).toFixed(1)));
-              h.jitter.push(Number((data.jitter_us || 0).toFixed(1)));
-              h.drops.push(Number((data.drop_pct || 0).toFixed(3)));
-
-              if (h.labels.length > 60) {
-                h.labels.shift();
-                h.txMbps.shift();
-                h.rxMbps.shift();
-                h.txKpps.shift();
-                h.latAvg.shift();
-                h.latMax.shift();
-                h.jitter.shift();
-                h.drops.shift();
-              }
-
-              if (tpChartInstance.current) {
-                tpChartInstance.current.setOption({
-                  xAxis: { data: h.labels },
-                  series: [
-                    { data: h.txMbps },
-                    { data: h.rxMbps },
-                    { data: h.txKpps },
-                  ],
-                });
-              }
-              if (latChartInstance.current) {
-                latChartInstance.current.setOption({
-                  xAxis: { data: h.labels },
-                  series: [
-                    { data: h.latAvg },
-                    { data: h.jitter },
-                    { data: h.drops },
-                  ],
-                });
-              }
-            } catch (e) {}
-          };
-        };
-        connectWs();
-        return () => {
-          clearTimeout(retryTimer);
-          if (ws) ws.close();
-        };
-      }, []);
-
-      // Initialize ECharts when on Cockpit tab
-      useEffect(() => {
-        if (activeTab !== "cockpit") return;
-        const h = historyRef.current;
-
-        if (tpChartRef.current) {
-          if (tpChartInstance.current) tpChartInstance.current.dispose();
-          const chart1 = echarts.init(tpChartRef.current);
-          chart1.setOption({
-            backgroundColor: "transparent",
-            animation: false,
-            tooltip: { trigger: "axis", backgroundColor: "#0F172A", borderColor: "#334155", textStyle: { color: "#F8FAFC", fontSize: 12 } },
-            legend: { data: ["TX Throughput (Mbps)", "RX Throughput (Mbps)", "Packet Rate (kpps)"], textStyle: { color: "#94A3B8", fontSize: 11 }, top: 0 },
-            grid: { left: 52, right: 52, top: 32, bottom: 24 },
-            xAxis: { type: "category", boundaryGap: false, data: h.labels, axisLabel: { color: "#64748B", fontSize: 10 }, axisLine: { lineStyle: { color: "#1E293B" } } },
-            yAxis: [
-              { type: "value", name: "Mbps", nameTextStyle: { color: "#00E5FF", fontSize: 10 }, axisLabel: { color: "#94A3B8", fontSize: 10 }, splitLine: { lineStyle: { color: "#1E293B", type: "dashed" } } },
-              { type: "value", name: "kpps", nameTextStyle: { color: "#10B981", fontSize: 10 }, axisLabel: { color: "#10B981", fontSize: 10 }, splitLine: { show: false } },
-            ],
-            series: [
-              {
-                name: "TX Throughput (Mbps)",
-                type: "line",
-                smooth: true,
-                showSymbol: false,
-                lineStyle: { width: 2.5, color: "#00E5FF" },
-                areaStyle: {
-                  color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                    { offset: 0, color: "rgba(0, 229, 255, 0.35)" },
-                    { offset: 1, color: "rgba(0, 229, 255, 0.0)" },
-                  ]),
-                },
-                data: h.txMbps,
-              },
-              {
-                name: "RX Throughput (Mbps)",
-                type: "line",
-                smooth: true,
-                showSymbol: false,
-                lineStyle: { width: 2, type: "dashed", color: "#10B981" },
-                data: h.rxMbps,
-              },
-              {
-                name: "Packet Rate (kpps)",
-                type: "line",
-                yAxisIndex: 1,
-                smooth: true,
-                showSymbol: false,
-                lineStyle: { width: 1.8, color: "#8B5CF6" },
-                data: h.txKpps,
-              },
-            ],
-          });
-          tpChartInstance.current = chart1;
-        }
-
-        if (latChartRef.current) {
-          if (latChartInstance.current) latChartInstance.current.dispose();
-          const chart2 = echarts.init(latChartRef.current);
-          chart2.setOption({
-            backgroundColor: "transparent",
-            animation: false,
-            tooltip: { trigger: "axis", backgroundColor: "#0F172A", borderColor: "#334155", textStyle: { color: "#F8FAFC", fontSize: 12 } },
-            legend: { data: ["Avg Latency (us)", "Jitter (us)", "Packet Loss (%)"], textStyle: { color: "#94A3B8", fontSize: 11 }, top: 0 },
-            grid: { left: 52, right: 52, top: 32, bottom: 24 },
-            xAxis: { type: "category", boundaryGap: false, data: h.labels, axisLabel: { color: "#64748B", fontSize: 10 }, axisLine: { lineStyle: { color: "#1E293B" } } },
-            yAxis: [
-              { type: "value", name: "Microseconds (us)", nameTextStyle: { color: "#F59E0B", fontSize: 10 }, axisLabel: { color: "#94A3B8", fontSize: 10 }, splitLine: { lineStyle: { color: "#1E293B", type: "dashed" } } },
-              { type: "value", name: "Loss %", min: 0, max: 20, nameTextStyle: { color: "#F43F5E", fontSize: 10 }, axisLabel: { color: "#F43F5E", fontSize: 10 }, splitLine: { show: false } },
-            ],
-            series: [
-              {
-                name: "Avg Latency (us)",
-                type: "line",
-                smooth: true,
-                showSymbol: false,
-                lineStyle: { width: 2.5, color: "#F59E0B" },
-                areaStyle: {
-                  color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                    { offset: 0, color: "rgba(245, 158, 11, 0.30)" },
-                    { offset: 1, color: "rgba(245, 158, 11, 0.0)" },
-                  ]),
-                },
-                data: h.latAvg,
-              },
-              {
-                name: "Jitter (us)",
-                type: "line",
-                smooth: true,
-                showSymbol: false,
-                lineStyle: { width: 2, color: "#A855F7" },
-                data: h.jitter,
-              },
-              {
-                name: "Packet Loss (%)",
-                type: "line",
-                yAxisIndex: 1,
-                smooth: true,
-                showSymbol: false,
-                lineStyle: { width: 2, color: "#F43F5E" },
-                areaStyle: { color: "rgba(244, 63, 94, 0.2)" },
-                data: h.drops,
-              },
-            ],
-          });
-          latChartInstance.current = chart2;
-        }
-
-        const handleResize = () => {
-          tpChartInstance.current?.resize();
-          latChartInstance.current?.resize();
-        };
-        window.addEventListener("resize", handleResize);
-        return () => window.removeEventListener("resize", handleResize);
-      }, [activeTab]);
-
-      // Select a Pre-built Profile Card
-      function selectProfile(p) {
-        setSelectedProfileId(p.id);
-        setRatePct(p.default_rate_pct || 35);
-        setSimulatedUsers(p.default_users || 500);
-        setSimulatedDevices(p.default_devices || 1250);
-        if (p.protocol_mix) setProtocolMix({ ...p.protocol_mix });
-        setCustomConfig(prev => ({
-          ...prev,
-          frame_size: p.avg_frame_size || 512,
-          vlan_id: p.vlan_id || 0,
-          dscp: p.dscp || 0,
-        }));
-      }
-
-      // Launch or Stop Strain Test
-      async function handleStartTest(overrideMode = null) {
-        const modeToRun = overrideMode || testMode;
-        const payload = {
-          profile_id: selectedProfileId,
-          test_mode: modeToRun,
-          duration_sec: modeToRun === "continuous" ? 0 : Number(durationSec),
-          rate_pct: Number(ratePct),
-          simulated_users: Number(simulatedUsers),
-          simulated_devices: Number(simulatedDevices),
-          link_capacity_mbps: Number(linkCapacityMbps),
-          protocol_mix: protocolMix,
-          ...customConfig,
-        };
-        const res = await fetch("/api/test/start", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        }).then(r => r.json());
-        showToast(`Launched: ${res.name} (${res.rate_pct}% Line Rate)`, "success");
-        const runsRes = await fetch("/api/runs").then(r => r.json());
-        if (runsRes.runs) setRuns(runsRes.runs);
-      }
-
-      async function handleStopTest() {
-        await fetch("/api/test/stop", { method: "POST" });
-        showToast("Network strain test stopped. Report saved to History.", "warn");
-        const runsRes = await fetch("/api/runs").then(r => r.json());
-        if (runsRes.runs) setRuns(runsRes.runs);
-      }
-
-      async function handleThrottleChange(newVal) {
-        const v = Number(newVal);
-        setRatePct(v);
-        if (telemetry?.running) {
-          await fetch("/api/test/rate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ rate_pct: v }),
-          });
-        }
-      }
-
-      async function syncLiveScale(nextUsers, nextDevices, nextMix, nextCap) {
-        if (telemetry?.running) {
-          await fetch("/api/test/scale", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              simulated_users: nextUsers ?? simulatedUsers,
-              simulated_devices: nextDevices ?? simulatedDevices,
-              protocol_mix: nextMix ?? protocolMix,
-              link_capacity_mbps: nextCap ?? linkCapacityMbps,
-            }),
-          });
-        }
-      }
-
-      async function handleRunRFC2544() {
-        setRfcLoading(true);
-        try {
-          const res = await fetch("/api/certification/rfc2544", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              site_name: settings.site_label || "Customer Site Network",
-              link_capacity_mbps: linkCapacityMbps,
-              simulated_users: simulatedUsers,
-              simulated_devices: simulatedDevices,
-              vlan_id: customConfig.vlan_id,
-            }),
-          }).then(r => r.json());
-          setRfcResult(res);
-          showToast(`RFC 2544 Site Certification Complete — Verdict: ${res.verdict}`, "success");
-          const runsRes = await fetch("/api/runs").then(r => r.json());
-          if (runsRes.runs) setRuns(runsRes.runs);
-        } finally {
-          setRfcLoading(false);
-        }
-      }
-
-      const isRunning = Boolean(telemetry?.running);
-      const txBpsObj = formatBps(telemetry?.tx_bps || 0);
-      const rxBpsObj = formatBps(telemetry?.rx_bps || 0);
-      const txPpsObj = formatPps(telemetry?.tx_pps || 0);
-      const interfaces = telemetry?.interfaces || hardware?.interfaces || [];
-      const physInterfaces = interfaces.filter(i => i.pci_address !== "virtual");
-
-      return (
-        <div className="min-h-screen flex flex-col">
-          {/* Toast Notification */}
-          {toast && (
-            <div className={`fixed bottom-5 right-5 z-50 px-5 py-3 rounded-xl font-semibold text-sm shadow-2xl border flex items-center gap-3 ${
-              toast.type === "success" ? "bg-emerald-950/95 border-emerald-500 text-emerald-200" :
-              toast.type === "warn" ? "bg-rose-950/95 border-rose-500 text-rose-200" :
-              "bg-slate-900/95 border-cyan-500 text-cyan-200"
-            }`}>
-              <span>⚡</span>
-              <span>{toast.msg}</span>
+          <!-- Top 7-Card KPI Strip -->
+          <div class="kpi-strip">
+            <div class="kpi-card">
+              <div class="kpi-top">
+                <span class="kpi-icon">&#8599;</span>
+                <span>TX Throughput</span>
+              </div>
+              <div class="kpi-value"><span id="kpiTxVal">0.00</span><span class="kpi-unit" id="kpiTxUnit">Gbps</span></div>
+              <div class="progress-track"><div class="progress-fill" id="kpiTxBar" style="width:0%"></div></div>
+              <div class="kpi-foot" id="kpiTxFoot">Target: 5.00 Gbps (0.0%)</div>
             </div>
-          )}
 
-          {/* TOP HEADER BAR */}
-          <header className="sticky top-0 z-40 bg-slate-950/90 backdrop-blur-xl border-b border-slate-800/90 px-4 lg:px-6 py-3">
-            <div className="max-w-[1600px] mx-auto flex flex-wrap items-center justify-between gap-4">
-              {/* Brand Title & Subtitle */}
-              <div className="flex items-center gap-3.5">
-                <BrandLogoSVG />
-                <div>
-                  <div className="flex items-center gap-2.5">
-                    <h1 className="text-lg md:text-xl font-extrabold tracking-tight bg-gradient-to-r from-cyan-400 via-sky-300 to-emerald-400 bg-clip-text text-transparent">
-                      Stephan Van Vuuren's Network Tester
-                    </h1>
-                    <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
-                      Dell PowerEdge R640
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-400 font-mono">
-                    Cisco TRex v3.05 DPDK Engine • 1x 10GbE + 4x 1GbE Portable DHCP Appliance • <span className="text-cyan-400">http://10.20.30.237</span>
-                  </p>
-                </div>
+            <div class="kpi-card">
+              <div class="kpi-top">
+                <span class="kpi-icon">&#8601;</span>
+                <span>RX Throughput</span>
               </div>
+              <div class="kpi-value"><span id="kpiRxVal">0.00</span><span class="kpi-unit" id="kpiRxUnit">Gbps</span></div>
+              <div class="progress-track"><div class="progress-fill" id="kpiRxBar" style="width:0%"></div></div>
+              <div class="kpi-foot" id="kpiRxFoot">Target: 5.00 Gbps (0.0%)</div>
+            </div>
 
-              {/* Active NIC Port Link Lights (Green / Red LED Indicators) */}
-              <div className="flex flex-wrap items-center gap-2 bg-slate-900/90 border border-slate-800 rounded-xl px-3 py-1.5">
-                <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 mr-1">NIC LEDs:</span>
-                {(physInterfaces.length ? physInterfaces : [
-                  { ifname: "enp216s0", operstate: "UP", max_speed_label: "10 Gbps", speed_mbps: 100, is_management: true },
-                  { ifname: "eno1", operstate: "DOWN", max_speed_label: "1 Gbps", speed_mbps: 0 },
-                  { ifname: "eno2", operstate: "DOWN", max_speed_label: "1 Gbps", speed_mbps: 0 },
-                  { ifname: "eno3", operstate: "DOWN", max_speed_label: "1 Gbps", speed_mbps: 0 },
-                  { ifname: "eno4", operstate: "DOWN", max_speed_label: "1 Gbps", speed_mbps: 0 },
-                ]).map(nic => {
-                  const up = nic.operstate === "UP" || nic.link_detected;
-                  return (
-                    <div
-                      key={nic.ifname}
-                      onClick={() => setActiveTab("hardware")}
-                      title={`${nic.ifname} (${nic.max_speed_label}) - ${up ? `LINK UP (${nic.speed_mbps} Mbps)` : 'NO CARRIER'}`}
-                      className={`cursor-pointer flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-mono transition ${
-                        up
-                          ? "bg-emerald-500/10 border-emerald-500/40 text-emerald-300"
-                          : "bg-rose-500/10 border-rose-500/30 text-slate-400"
-                      }`}
-                    >
-                      <span className={`w-2.5 h-2.5 rounded-full ${
-                        up ? "bg-emerald-400 shadow-[0_0_8px_#10B981] led-blink" : "bg-rose-500 shadow-[0_0_6px_#F43F5E]"
-                      }`}></span>
-                      <span className="font-bold">{nic.ifname}</span>
-                      <span className="text-[10px] opacity-80">{nic.max_speed_label === "10 Gbps" ? "10G" : "1G"}</span>
-                      {nic.is_management && (
-                        <span className="text-[9px] bg-cyan-500/20 text-cyan-300 px-1 rounded">DHCP</span>
-                      )}
-                    </div>
-                  );
-                })}
+            <div class="kpi-card">
+              <div class="kpi-top">
+                <span class="kpi-icon">&#9776;</span>
+                <span>Packet &amp; Session Rate</span>
               </div>
+              <div class="kpi-value"><span id="kpiPpsVal">0.00</span><span class="kpi-unit" id="kpiPpsUnit">Mpps</span></div>
+              <div class="kpi-foot" id="kpiFlowsFoot">Flows: 0 | TCP Est: 0</div>
+            </div>
 
-              {/* Live Server CPU / RAM / WS Telemetry Status Gauges */}
-              <div className="flex items-center gap-4 bg-slate-900/90 border border-slate-800 rounded-xl px-3.5 py-1.5 text-xs font-mono">
-                <div>
-                  <div className="flex justify-between text-[10px] text-slate-400">
-                    <span>R640 CPU</span>
-                    <span className="text-cyan-400 font-bold">{telemetry?.cpu_pct ?? 2.5}%</span>
-                  </div>
-                  <div className="w-20 h-1.5 bg-slate-800 rounded-full overflow-hidden mt-1">
-                    <div className="h-full bg-cyan-400 transition-all duration-300" style={{ width: `${Math.min(100, telemetry?.cpu_pct || 4)}%` }}></div>
-                  </div>
+            <div class="kpi-card">
+              <div class="kpi-top">
+                <span class="kpi-icon">&#9201;</span>
+                <span>Latency (Avg)</span>
+              </div>
+              <div class="kpi-value"><span id="kpiLatVal">0.00</span><span class="kpi-unit">&mu;s</span></div>
+              <div class="kpi-foot" id="kpiLatFoot">P95: 0.0 &mu;s | P99: 0.0 &mu;s</div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-top">
+                <span class="kpi-icon">&#8767;</span>
+                <span>Jitter</span>
+              </div>
+              <div class="kpi-value"><span id="kpiJitVal">0.00</span><span class="kpi-unit">&mu;s</span></div>
+              <div class="kpi-foot" id="kpiJitFoot">MOS: — | Probe active</div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-top">
+                <span class="kpi-icon">&#9888;</span>
+                <span>Packet Loss</span>
+              </div>
+              <div class="kpi-value"><span id="kpiLossVal">0.0000</span><span class="kpi-unit">%</span></div>
+              <div class="kpi-foot" id="kpiLossFoot">Dropped: 0 pkts</div>
+            </div>
+
+            <!-- Active Test Control Card -->
+            <div class="kpi-card active-run-card idle" id="kpiRunCard">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span id="kpiRunBadgeDot" style="width:10px;height:10px;border-radius:50%;background:#64748B;display:inline-block;"></span>
+                <span style="font-weight:700;font-size:13.5px;" id="kpiRunStatusTitle">Idle &mdash; Ready</span>
+              </div>
+              <div style="font-size:11.5px;color:var(--text-secondary);margin:4px 0 6px;" id="kpiRunSubInfo">
+                10,000-User EFG Validation Ready
+              </div>
+              <div id="kpiRunActionArea">
+                <button class="btn btn-primary btn-sm btn-block" onclick="App.quickStart10K()">&#9654; Run 10K EFG Test</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Row 2: Live Throughput Chart | Traffic Mix Donut | UniFi Stack Card -->
+          <div class="grid-dashboard-mid">
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">&#128200; Throughput (Live)</div>
+                <div class="card-subtitle" id="dashChartEngineLabel">Engine: Cisco TRex ASTF</div>
+              </div>
+              <div id="dashThroughputChart" style="width:100%;height:245px;"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">&#127919; Traffic Mix (Live)</div>
+                <button class="btn btn-outline btn-sm" onclick="App.navigate('traffic-mix-builder')">Customize</button>
+              </div>
+              <div id="dashMixChart" style="width:100%;height:245px;"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">
+                  <span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:5px;background:#1769D2;color:#FFF;font-weight:800;font-size:12px;">U</span>
+                  <span>UniFi Stack (Live via API)</span>
                 </div>
-                <div>
-                  <div className="flex justify-between text-[10px] text-slate-400">
-                    <span>RAM (500G)</span>
-                    <span className="text-emerald-400 font-bold">{telemetry?.ram_pct ?? 0.8}%</span>
-                  </div>
-                  <div className="w-20 h-1.5 bg-slate-800 rounded-full overflow-hidden mt-1">
-                    <div className="h-full bg-emerald-400 transition-all duration-300" style={{ width: `${Math.min(100, Math.max(4, telemetry?.ram_pct || 2))}%` }}></div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1.5 pl-2 border-l border-slate-800">
-                  <span className={`w-2 h-2 rounded-full ${wsConnected ? "bg-cyan-400 led-blink" : "bg-amber-400"}`}></span>
-                  <span className="text-[11px] text-slate-300">{wsConnected ? "250ms LIVE" : "SYNCING"}</span>
-                </div>
+                <span class="badge badge-neutral" id="dashUnifiBadge">Not Configured</span>
+              </div>
+              <div id="dashUnifiStackBody"></div>
+            </div>
+          </div>
+
+          <!-- Row 3: Network Interfaces | Quick Test | Recent Tests -->
+          <div class="grid-dashboard-bot">
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">&#128268; Network Interfaces (R640 &amp; TRex)</div>
+                <span class="badge badge-success" id="dashNicCountBadge">Online</span>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Port</th>
+                      <th>Interface</th>
+                      <th>Speed</th>
+                      <th>State</th>
+                      <th>TX</th>
+                      <th>RX</th>
+                    </tr>
+                  </thead>
+                  <tbody id="dashNicTableBody"></tbody>
+                </table>
               </div>
             </div>
 
-            {/* NAVIGATION TABS */}
-            <div className="max-w-[1600px] mx-auto mt-3 flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/60">
-              <div className="flex flex-wrap gap-1.5">
-                {[
-                  { id: "cockpit", label: "⚡ Main Strain Cockpit" },
-                  { id: "simulator", label: "👥 Users, Devices & Traffic Mix" },
-                  { id: "certification", label: "🏆 RFC 2544 & Field Diagnostics" },
-                  { id: "history", label: "📅 Test Scheduler & History" },
-                  { id: "hardware", label: "⚙️ R640 NICs & UI Configuration" },
-                ].map(tab => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
-                      activeTab === tab.id
-                        ? "bg-cyan-500 text-slate-950 shadow-lg shadow-cyan-500/25"
-                        : "bg-slate-900/80 text-slate-300 hover:bg-slate-800 border border-slate-800"
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">&#9889; Quick Test</div>
+                <span class="badge badge-info">EFG Ready</span>
               </div>
-
-              {/* Quick Export & Status Bar */}
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={async () => {
-                    await fetch("/api/system/git-pull", { method: "POST" });
-                    showToast("Checking GitHub origin/main & auto-deploying updates...", "info");
-                    setTimeout(() => window.location.reload(), 3000);
-                  }}
-                  className="px-3 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-mono text-purple-300 transition"
-                  title="Auto-Deploy Daemon polls GitHub every 15s automatically, or click to pull immediately"
-                >
-                  🔄 Git Auto-Sync: ON
-                </button>
-                <a
-                  href="/api/runs/live/export/csv"
-                  className="px-3 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-mono text-cyan-300 transition"
-                >
-                  ⬇ Export Latest CSV
-                </a>
-                <a
-                  href="/api/runs/live/export/pdf"
-                  className="px-3 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-xs font-mono font-semibold text-emerald-300 transition"
-                >
-                  📄 Download Branded PDF Report
-                </a>
+              <div class="grid-2" style="gap:10px;">
+                <div class="form-group">
+                  <label class="form-label">Profile</label>
+                  <select class="form-control" id="qtDashProfile"></select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Users (Simulated)</label>
+                  <select class="form-control" id="qtDashUsers">
+                    <option value="500">500</option>
+                    <option value="1000">1,000</option>
+                    <option value="2500">2,500</option>
+                    <option value="5000">5,000</option>
+                    <option value="7500">7,500</option>
+                    <option value="10000" selected>10,000</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Target Throughput</label>
+                  <select class="form-control" id="qtDashTargetGbps">
+                    <option value="0.1">100 Mbps</option>
+                    <option value="0.5">500 Mbps</option>
+                    <option value="1.0">1.0 Gbps</option>
+                    <option value="2.5">2.5 Gbps</option>
+                    <option value="5.0" selected>5.0 Gbps</option>
+                    <option value="10.0">10.0 Gbps</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Duration</label>
+                  <select class="form-control" id="qtDashDuration">
+                    <option value="30">00:00:30</option>
+                    <option value="60" selected>00:01:00</option>
+                    <option value="180">00:03:00</option>
+                    <option value="600">00:10:00</option>
+                    <option value="1800">00:30:00</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Traffic Engine Mode</label>
+                <select class="form-control" id="qtDashEngine">
+                  <option value="trex_astf" selected>Stateful ASTF (Realistic TCP/UDP User Sessions)</option>
+                  <option value="trex_stl">Stateless STL (Wire-Speed L2-L4 Streams)</option>
+                  <option value="internet_wan">Live Internet / WAN Gateway Traffic (via 10.20.30.1)</option>
+                </select>
+              </div>
+              <div style="display:flex;gap:8px;margin-top:6px;">
+                <button class="btn btn-primary" style="flex:1;" onclick="App.startFromDashboardQuickTest()">&#9654; Start Test</button>
+                <button class="btn btn-outline" onclick="App.navigate('traffic-mix-builder')">Save Profile</button>
               </div>
             </div>
-          </header>
 
-          {/* MAIN WORKSPACE CONTENT */}
-          <main className="flex-1 max-w-[1600px] w-full mx-auto px-4 lg:px-6 py-5 space-y-5">
-
-            {/* =====================================================================
-                TAB 1: MAIN STRAIN COCKPIT
-               ===================================================================== */}
-            {activeTab === "cockpit" && (
-              <>
-                {/* TOP KPI TELEMETRY CARDS + MASTER LAUNCH / STOP / THROTTLE CONTROL */}
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-                  {/* Left 8 Cols: 4 Live High-Precision Gauges */}
-                  <div className="lg:col-span-8 grid grid-cols-2 sm:grid-cols-4 gap-3.5">
-                    {/* TX/RX Throughput Card */}
-                    <div className="glass-card rounded-2xl p-4 border-l-4 border-l-cyan-400">
-                      <div className="flex items-center justify-between text-xs text-slate-400 font-semibold">
-                        <span>LINE THROUGHPUT</span>
-                        <span className="font-mono text-[10px] text-cyan-400">{ratePct.toFixed(0)}% TARGET</span>
-                      </div>
-                      <div className="mt-2 flex items-baseline gap-1.5 font-mono">
-                        <span className="text-3xl font-extrabold text-white">{txBpsObj.val}</span>
-                        <span className="text-sm font-bold text-cyan-400">{txBpsObj.unit}</span>
-                      </div>
-                      <div className="mt-2 text-[11px] font-mono text-slate-400 flex justify-between">
-                        <span>RX: <strong className="text-emerald-400">{rxBpsObj.full}</strong></span>
-                      </div>
-                    </div>
-
-                    {/* Packet Rate (Mpps / kpps) Card */}
-                    <div className="glass-card rounded-2xl p-4 border-l-4 border-l-emerald-400">
-                      <div className="flex items-center justify-between text-xs text-slate-400 font-semibold">
-                        <span>PACKET RATE (PPS)</span>
-                        <span className="font-mono text-[10px] text-emerald-400">{telemetry?.frame_size || 354}B AVG</span>
-                      </div>
-                      <div className="mt-2 flex items-baseline gap-1.5 font-mono">
-                        <span className="text-3xl font-extrabold text-white">{txPpsObj.val}</span>
-                        <span className="text-sm font-bold text-emerald-400">{txPpsObj.unit}</span>
-                      </div>
-                      <div className="mt-2 text-[11px] font-mono text-slate-400">
-                        Total TX: <strong className="text-slate-200">{((telemetry?.tx_packets || 0) / 1e6).toFixed(2)}M pkts</strong>
-                      </div>
-                    </div>
-
-                    {/* Latency & Jitter Card */}
-                    <div className="glass-card rounded-2xl p-4 border-l-4 border-l-amber-400">
-                      <div className="flex items-center justify-between text-xs text-slate-400 font-semibold">
-                        <span>LATENCY & JITTER</span>
-                        <span className="font-mono text-[10px] text-amber-400">MOS {(telemetry?.mos_score || 4.45).toFixed(2)}</span>
-                      </div>
-                      <div className="mt-2 flex items-baseline gap-1.5 font-mono">
-                        <span className="text-3xl font-extrabold text-white">{(telemetry?.lat_avg_us || 0).toFixed(1)}</span>
-                        <span className="text-sm font-bold text-amber-400">us</span>
-                      </div>
-                      <div className="mt-2 text-[11px] font-mono text-slate-400 flex justify-between">
-                        <span>Jitter: <strong className="text-purple-400">{(telemetry?.jitter_us || 0).toFixed(1)} us</strong></span>
-                        <span>Max: <strong className="text-slate-300">{(telemetry?.lat_max_us || 0).toFixed(0)} us</strong></span>
-                      </div>
-                    </div>
-
-                    {/* Dropped Packets & Loss % Card */}
-                    <div className={`glass-card rounded-2xl p-4 border-l-4 ${(telemetry?.drop_pct || 0) > 0.5 ? "border-l-rose-500" : "border-l-violet-400"}`}>
-                      <div className="flex items-center justify-between text-xs text-slate-400 font-semibold">
-                        <span>PACKET DROPS</span>
-                        <span className={`font-mono text-[10px] font-bold ${(telemetry?.drop_pct || 0) > 0.5 ? "text-rose-400" : "text-emerald-400"}`}>
-                          {(telemetry?.drop_pct || 0) > 0.5 ? "SATURATED" : "ZERO-DROP OK"}
-                        </span>
-                      </div>
-                      <div className="mt-2 flex items-baseline gap-1.5 font-mono">
-                        <span className={`text-3xl font-extrabold ${(telemetry?.drop_pct || 0) > 0.5 ? "text-rose-400" : "text-white"}`}>
-                          {(telemetry?.drop_pct || 0).toFixed(3)}
-                        </span>
-                        <span className="text-sm font-bold text-rose-400">%</span>
-                      </div>
-                      <div className="mt-2 text-[11px] font-mono text-slate-400">
-                        Dropped: <strong className="text-slate-200">{(telemetry?.dropped_packets || 0).toLocaleString()} pkts</strong>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Right 4 Cols: BIG RED STOP / GREEN LAUNCH + LIVE THROTTLE SLIDER */}
-                  <div className="lg:col-span-4 glass-card rounded-2xl p-4 flex flex-col justify-between border border-slate-700/80">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 block">
-                          {isRunning ? `RUNNING (${telemetry?.elapsed_sec || 0}s elapsed)` : "ENGINE READY"}
-                        </span>
-                        <h2 className="text-sm font-bold text-white truncate max-w-[210px]">
-                          {isRunning ? telemetry?.test_name : (profiles.find(p => p.id === selectedProfileId)?.name || "IMIX Realistic Traffic")}
-                        </h2>
-                      </div>
-
-                      {!isRunning ? (
-                        <button
-                          onClick={() => handleStartTest()}
-                          className="px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-extrabold text-sm tracking-wide uppercase neon-green-glow transition transform active:scale-95 flex items-center gap-2"
-                        >
-                          <span>▶</span> LAUNCH STRAIN TEST
-                        </button>
-                      ) : (
-                        <button
-                          onClick={handleStopTest}
-                          className="px-6 py-3 rounded-xl bg-gradient-to-r from-rose-600 to-red-500 hover:from-rose-500 hover:to-red-400 text-white font-extrabold text-sm tracking-wide uppercase neon-red-glow transition transform active:scale-95 flex items-center gap-2"
-                        >
-                          <span>■</span> EMERGENCY STOP
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Live 0-100% Line-Rate Throttle Slider */}
-                    <div className="mt-3 pt-2.5 border-t border-slate-800">
-                      <div className="flex justify-between items-center text-xs font-mono mb-1">
-                        <span className="text-slate-300 font-semibold">LIVE LINE-RATE THROTTLE SLIDER</span>
-                        <span className="text-cyan-400 font-extrabold text-sm">{ratePct.toFixed(0)}% ({((linkCapacityMbps * (ratePct / 100)) / 1000).toFixed(2)} Gbps)</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="1"
-                        max="100"
-                        step="1"
-                        value={ratePct}
-                        onChange={e => handleThrottleChange(e.target.value)}
-                        className="w-full h-2.5 bg-slate-800 rounded-lg cursor-pointer"
-                      />
-                      <div className="flex justify-between text-[10px] font-mono text-slate-500 mt-1">
-                        {[1, 10, 25, 50, 75, 100].map(pct => (
-                          <button
-                            key={pct}
-                            onClick={() => handleThrottleChange(pct)}
-                            className="hover:text-cyan-400 transition"
-                          >
-                            {pct}%
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* INTERACTIVE ANIMATED NETWORK TOPOLOGY & DELL R640 REAR PANEL SVG */}
-                <AnimatedNetworkTopologySVG
-                  telemetry={telemetry}
-                  simulatedUsers={simulatedUsers}
-                  simulatedDevices={simulatedDevices}
-                  protocolMix={protocolMix}
-                  onSelectNic={() => setActiveTab("hardware")}
-                />
-
-                {/* QUICK USERS / DEVICES / MODE BAR + 1-CLICK PROFILE SELECTOR CARDS */}
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-                  {/* Left 5 Cols: Quick Scale (How Many Users & Devices) + Test Mode */}
-                  <div className="lg:col-span-5 glass-card rounded-2xl p-4 space-y-3.5">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-cyan-400">
-                        👥 Quick Scale: Users, Devices & Test Mode
-                      </h3>
-                      <button
-                        onClick={() => setActiveTab("simulator")}
-                        className="text-[11px] font-mono text-cyan-300 hover:underline"
-                      >
-                        Open Full Traffic Studio →
-                      </button>
-                    </div>
-
-                    {/* 1-Click User/Device Scale Presets */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                      {scalePresets.map(preset => (
-                        <button
-                          key={preset.id}
-                          onClick={() => {
-                            setSimulatedUsers(preset.users);
-                            setSimulatedDevices(preset.devices);
-                            handleThrottleChange(preset.recommended_rate_pct);
-                            syncLiveScale(preset.users, preset.devices, null, null);
-                          }}
-                          className={`p-2 rounded-xl border text-left transition ${
-                            simulatedUsers === preset.users
-                              ? "bg-cyan-500/15 border-cyan-400 text-white"
-                              : "bg-slate-900/70 border-slate-800 text-slate-300 hover:border-slate-700"
-                          }`}
-                        >
-                          <div className="text-[10px] font-bold truncate">{preset.name.split('/')[0]}</div>
-                          <div className="text-xs font-mono font-extrabold text-cyan-400 mt-0.5">{preset.users.toLocaleString()} Users</div>
-                          <div className="text-[10px] font-mono text-emerald-400">{preset.devices.toLocaleString()} Dev</div>
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Sliders for Users & Devices */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                      <div className="bg-slate-900/80 p-2.5 rounded-xl border border-slate-800">
-                        <div className="flex justify-between text-xs font-mono">
-                          <span className="text-slate-400">Simulated Users:</span>
-                          <span className="text-cyan-400 font-bold">{simulatedUsers.toLocaleString()}</span>
-                        </div>
-                        <input
-                          type="range"
-                          min="1"
-                          max="25000"
-                          step="25"
-                          value={simulatedUsers}
-                          onChange={e => {
-                            const u = Number(e.target.value);
-                            setSimulatedUsers(u);
-                            syncLiveScale(u, null, null, null);
-                          }}
-                          className="w-full mt-1.5"
-                        />
-                      </div>
-
-                      <div className="bg-slate-900/80 p-2.5 rounded-xl border border-slate-800">
-                        <div className="flex justify-between text-xs font-mono">
-                          <span className="text-slate-400">Simulated Devices:</span>
-                          <span className="text-emerald-400 font-bold">{simulatedDevices.toLocaleString()}</span>
-                        </div>
-                        <input
-                          type="range"
-                          min="1"
-                          max="50000"
-                          step="50"
-                          value={simulatedDevices}
-                          onChange={e => {
-                            const d = Number(e.target.value);
-                            setSimulatedDevices(d);
-                            syncLiveScale(null, d, null, null);
-                          }}
-                          className="w-full mt-1.5"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Execution Mode Selector */}
-                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                      <div className="flex gap-1.5">
-                        {[
-                          { id: "continuous", label: "∞ Continuous" },
-                          { id: "timed", label: "⏱ Timed Duration" },
-                          { id: "step_ramp", label: "📈 Step-Ramp Saturation" },
-                        ].map(m => (
-                          <button
-                            key={m.id}
-                            onClick={() => setTestMode(m.id)}
-                            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition ${
-                              testMode === m.id
-                                ? "bg-indigo-500 text-white"
-                                : "bg-slate-900 text-slate-400 border border-slate-800 hover:text-white"
-                            }`}
-                          >
-                            {m.label}
-                          </button>
-                        ))}
-                      </div>
-
-                      {testMode !== "continuous" && (
-                        <div className="flex items-center gap-1.5 text-xs font-mono">
-                          <span className="text-slate-400">Duration:</span>
-                          <input
-                            type="number"
-                            value={durationSec}
-                            onChange={e => setDurationSec(Number(e.target.value))}
-                            className="w-16 px-2 py-1 rounded bg-slate-900 border border-slate-700 text-white text-center"
-                          />
-                          <span className="text-slate-500">sec</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Right 7 Cols: 1-Click Pre-Built Profile Selector Cards */}
-                  <div className="lg:col-span-7 glass-card rounded-2xl p-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                        🎯 1-Click Traffic Profile Selector Cards
-                      </h3>
-                      <div className="flex items-center gap-2 text-xs font-mono">
-                        <span className="text-slate-400">Link Speed Reference:</span>
-                        <select
-                          value={linkCapacityMbps}
-                          onChange={e => {
-                            const cap = Number(e.target.value);
-                            setLinkCapacityMbps(cap);
-                            syncLiveScale(null, null, null, cap);
-                          }}
-                          className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-cyan-300 font-bold"
-                        >
-                          <option value={10000}>10 Gbps (10GbE Aquantia)</option>
-                          <option value={5000}>5 Gbps (NBase-T)</option>
-                          <option value={2500}>2.5 Gbps (NBase-T)</option>
-                          <option value={1000}>1 Gbps (Intel I350 1GbE)</option>
-                          <option value={100}>100 Mbps (Fast Ethernet Switch)</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                      {profiles.map(p => {
-                        const active = selectedProfileId === p.id;
-                        return (
-                          <div
-                            key={p.id}
-                            onClick={() => selectProfile(p)}
-                            className={`cursor-pointer rounded-xl p-3 border transition flex flex-col justify-between ${
-                              active
-                                ? "bg-slate-900/95 border-cyan-400 neon-cyan-glow"
-                                : "bg-slate-900/50 border-slate-800/90 hover:border-slate-600"
-                            }`}
-                          >
-                            <div>
-                              <div className="flex items-center justify-between gap-1">
-                                <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
-                                  {p.avg_frame_size}B
-                                </span>
-                                <span className="text-[10px] font-mono text-cyan-400">{p.default_rate_pct}%</span>
-                              </div>
-                              <div className="text-xs font-extrabold text-white mt-2">{p.short_name}</div>
-                              <p className="text-[10px] text-slate-400 mt-1 line-clamp-2 leading-relaxed">
-                                {p.description}
-                              </p>
-                            </div>
-                            <div className="mt-2.5 pt-1.5 border-t border-slate-800/80 flex items-center justify-between text-[10px] font-mono text-slate-400">
-                              <span>{p.default_users} usr</span>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  selectProfile(p);
-                                  setTimeout(() => handleStartTest(), 50);
-                                }}
-                                className="text-emerald-400 hover:underline font-bold"
-                              >
-                                ▶ Run Now
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-
-                {/* REAL-TIME 60FPS SCROLLING AREA GRAPHS (THROUGHPUT & LATENCY/JITTER/LOSS) */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <div className="glass-card rounded-2xl p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-cyan-400">
-                        📈 Real-Time Throughput (Mbps/Gbps) & Packet Rate (kpps)
-                      </h3>
-                      <span className="text-[11px] font-mono text-slate-400">250ms WebSocket Stream</span>
-                    </div>
-                    <div ref={tpChartRef} className="w-full h-64"></div>
-                  </div>
-
-                  <div className="glass-card rounded-2xl p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-amber-400">
-                        ⚡ Real-Time Latency (us), Jitter (us) & Packet Drop %
-                      </h3>
-                      <span className="text-[11px] font-mono text-slate-400">ITU-T G.107 VoIP SLA Monitor</span>
-                    </div>
-                    <div ref={latChartRef} className="w-full h-64"></div>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {/* =====================================================================
-                TAB 2: USERS, DEVICES & TRAFFIC MIX STUDIO + CUSTOM PACKET BUILDER
-               ===================================================================== */}
-            {activeTab === "simulator" && (
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-                {/* Left 7 Cols: Users, Devices & Traffic Mix Percentages */}
-                <div className="lg:col-span-7 glass-card rounded-2xl p-5 space-y-5">
-                  <div>
-                    <h2 className="text-base font-extrabold text-white">
-                      👥 Multi-User & Multi-Device Traffic Mix Synthesizer
-                    </h2>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      Simulate realistic branches, campuses, or data centers by choosing how many concurrent users & devices to emulate and blending application traffic types.
-                    </p>
-                  </div>
-
-                  {/* Scale Presets */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                    {scalePresets.map(preset => (
-                      <button
-                        key={preset.id}
-                        onClick={() => {
-                          setSimulatedUsers(preset.users);
-                          setSimulatedDevices(preset.devices);
-                          setRatePct(preset.recommended_rate_pct);
-                          syncLiveScale(preset.users, preset.devices, null, null);
-                        }}
-                        className="p-3 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-left transition"
-                      >
-                        <div className="text-xs font-bold text-white">{preset.name}</div>
-                        <div className="text-sm font-mono font-extrabold text-cyan-400 mt-1">
-                          {preset.users.toLocaleString()} Users
-                        </div>
-                        <div className="text-xs font-mono text-emerald-400">
-                          {preset.devices.toLocaleString()} Devices
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Detailed User & Device Sliders */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-900/60 p-4 rounded-xl border border-slate-800">
-                    <div>
-                      <label className="flex justify-between text-xs font-mono">
-                        <span className="text-slate-300 font-bold">CONCURRENT USERS</span>
-                        <span className="text-cyan-400 font-extrabold text-base">{simulatedUsers.toLocaleString()} Users</span>
-                      </label>
-                      <input
-                        type="range"
-                        min="1"
-                        max="50000"
-                        step="10"
-                        value={simulatedUsers}
-                        onChange={e => {
-                          const v = Number(e.target.value);
-                          setSimulatedUsers(v);
-                          syncLiveScale(v, null, null, null);
-                        }}
-                        className="w-full mt-2"
-                      />
-                      <p className="text-[11px] text-slate-400 mt-1">
-                        Controls concurrent TCP/UDP session flows & application burst concurrency.
-                      </p>
-                    </div>
-
-                    <div>
-                      <label className="flex justify-between text-xs font-mono">
-                        <span className="text-slate-300 font-bold">SIMULATED DEVICES (MAC/IP POOL)</span>
-                        <span className="text-emerald-400 font-extrabold text-base">{simulatedDevices.toLocaleString()} Devices</span>
-                      </label>
-                      <input
-                        type="range"
-                        min="1"
-                        max="100000"
-                        step="25"
-                        value={simulatedDevices}
-                        onChange={e => {
-                          const v = Number(e.target.value);
-                          setSimulatedDevices(v);
-                          syncLiveScale(null, v, null, null);
-                        }}
-                        className="w-full mt-2"
-                      />
-                      <p className="text-[11px] text-slate-400 mt-1">
-                        Spawns virtual client IPs & MAC entries via Cisco TRex Field Engine (`STLVmFlowVar`).
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Application Traffic Mix Sliders */}
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                        Application Traffic Types Mix
-                      </h3>
-                      <span className="text-xs font-mono text-cyan-400">
-                        Effective Frame Size: {telemetry?.frame_size || customConfig.frame_size} Bytes
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {TRAFFIC_TYPES_META.map(item => {
-                        const val = protocolMix[item.key] ?? 0;
-                        return (
-                          <div key={item.key} className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <span className="text-lg">{item.icon}</span>
-                                <div>
-                                  <div className="text-xs font-bold text-white">{item.label}</div>
-                                  <div className="text-[10px] text-slate-400">{item.sub}</div>
-                                </div>
-                              </div>
-                              <span className="text-sm font-mono font-extrabold" style={{ color: item.color }}>
-                                {val}%
-                              </span>
-                            </div>
-                            <input
-                              type="range"
-                              min="0"
-                              max="100"
-                              value={val}
-                              onChange={e => {
-                                const next = { ...protocolMix, [item.key]: Number(e.target.value) };
-                                setProtocolMix(next);
-                                syncLiveScale(null, null, next, null);
-                              }}
-                              className="w-full mt-2"
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Right 5 Cols: Custom L2/L3/VLAN/DSCP Packet Builder */}
-                <div className="lg:col-span-5 glass-card rounded-2xl p-5 space-y-4">
-                  <div>
-                    <h2 className="text-base font-extrabold text-white">
-                      🛠️ Custom L2/L3/QoS Packet & Stream Builder
-                    </h2>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      Configure 802.1Q VLAN tags, DSCP QoS classes, frame sizes, and source/destination IP & MAC ranges.
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3 text-xs">
-                    <div>
-                      <label className="text-slate-400 font-mono block mb-1">Frame Size (64B–9000B)</label>
-                      <input
-                        type="number"
-                        min="64"
-                        max="9000"
-                        value={customConfig.frame_size}
-                        onChange={e => setCustomConfig({ ...customConfig, frame_size: Number(e.target.value) })}
-                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-slate-400 font-mono block mb-1">802.1Q VLAN Tag (0=Untagged)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="4094"
-                        value={customConfig.vlan_id}
-                        onChange={e => setCustomConfig({ ...customConfig, vlan_id: Number(e.target.value) })}
-                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-slate-400 font-mono block mb-1">DSCP QoS Priority Class</label>
-                      <select
-                        value={customConfig.dscp}
-                        onChange={e => setCustomConfig({ ...customConfig, dscp: Number(e.target.value) })}
-                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-white"
-                      >
-                        <option value={0}>0 — Best Effort (CS0)</option>
-                        <option value={46}>46 — VoIP Expedited Forwarding (EF)</option>
-                        <option value={34}>34 — Video Conferencing (AF41)</option>
-                        <option value={26}>26 — Critical Data / SAN (AF31)</option>
-                        <option value={18}>18 — Low Latency App (AF21)</option>
-                        <option value={48}>48 — Network Control (CS6)</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-slate-400 font-mono block mb-1">L4 Transport Protocol</label>
-                      <select
-                        value={customConfig.protocol}
-                        onChange={e => setCustomConfig({ ...customConfig, protocol: e.target.value })}
-                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-white"
-                      >
-                        <option value="UDP">UDP High-Speed Stream</option>
-                        <option value="TCP">TCP Stateful / SYN Flood</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-slate-400 font-mono block mb-1">Source IP Pool Start</label>
-                      <input
-                        type="text"
-                        value={customConfig.src_ip_start}
-                        onChange={e => setCustomConfig({ ...customConfig, src_ip_start: e.target.value })}
-                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-cyan-300"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-slate-400 font-mono block mb-1">Source IP Pool End</label>
-                      <input
-                        type="text"
-                        value={customConfig.src_ip_end}
-                        onChange={e => setCustomConfig({ ...customConfig, src_ip_end: e.target.value })}
-                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-cyan-300"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-slate-400 font-mono block mb-1">Destination IP Start</label>
-                      <input
-                        type="text"
-                        value={customConfig.dst_ip_start}
-                        onChange={e => setCustomConfig({ ...customConfig, dst_ip_start: e.target.value })}
-                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-emerald-300"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-slate-400 font-mono block mb-1">Destination IP End</label>
-                      <input
-                        type="text"
-                        value={customConfig.dst_ip_end}
-                        onChange={e => setCustomConfig({ ...customConfig, dst_ip_end: e.target.value })}
-                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-emerald-300"
-                      />
-                    </div>
-                    <div className="col-span-2">
-                      <label className="text-slate-400 font-mono block mb-1">
-                        Optional Live Target IP (Send real UDP probes out active NIC)
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="e.g. 10.20.30.1 (leave blank for isolated TRex loopback)"
-                        value={customConfig.target_ip}
-                        onChange={e => setCustomConfig({ ...customConfig, target_ip: e.target.value })}
-                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-amber-300"
-                      />
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      setSelectedProfileId("custom");
-                      handleStartTest();
-                      setActiveTab("cockpit");
-                    }}
-                    className="w-full py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-400 text-slate-950 font-extrabold text-sm uppercase tracking-wider shadow-lg"
-                  >
-                    ▶ Launch Custom Traffic Simulation Now
-                  </button>
-                </div>
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">&#128203; Recent Tests</div>
+                <button class="btn btn-outline btn-sm" onclick="App.navigate('test-history')">View All &rarr;</button>
               </div>
-            )}
-
-            {/* =====================================================================
-                TAB 3: 1-CLICK RFC 2544 SITE CERTIFICATION & FIELD DIAGNOSTICS
-               ===================================================================== */}
-            {activeTab === "certification" && (
-              <div className="space-y-5">
-                {/* RFC 2544 & ITU-T Y.1564 Automated Site Certification Banner */}
-                <div className="glass-card rounded-2xl p-5 border border-cyan-500/30">
-                  <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div>
-                      <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300">
-                        Automated Standard Benchmark
-                      </span>
-                      <h2 className="text-lg font-extrabold text-white mt-1">
-                        🏆 1-Click RFC 2544 & ITU-T Y.1564 Site Certification Suite
-                      </h2>
-                      <p className="text-xs text-slate-400">
-                        Automatically sweeps all standard Ethernet frame sizes (64B, 128B, 256B, 512B, 1024B, 1280B, 1518B, 9000B Jumbo) and generates a signed Pass/Fail PDF Report.
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <button
-                        disabled={rfcLoading}
-                        onClick={handleRunRFC2544}
-                        className="px-5 py-3 rounded-xl bg-gradient-to-r from-cyan-400 to-emerald-400 text-slate-950 font-extrabold text-xs uppercase tracking-wider shadow-lg"
-                      >
-                        {rfcLoading ? "⏳ Running RFC 2544 Sweep..." : "▶ Run Full RFC 2544 Site Certification"}
-                      </button>
-                      {rfcResult?.run_id && (
-                        <a
-                          href={`/api/runs/${rfcResult.run_id}/export/pdf`}
-                          className="px-4 py-3 rounded-xl bg-emerald-500/20 border border-emerald-400 text-emerald-300 font-mono font-bold text-xs"
-                        >
-                          📄 Download RFC 2544 Certificate PDF
-                        </a>
-                      )}
-                    </div>
-                  </div>
-
-                  {rfcResult && (
-                    <div className="mt-4 overflow-x-auto">
-                      <table className="w-full text-left text-xs font-mono border-collapse">
-                        <thead>
-                          <tr className="border-b border-slate-800 text-slate-400">
-                            <th className="py-2 px-3">Frame Size</th>
-                            <th className="py-2 px-3">Line Efficiency</th>
-                            <th className="py-2 px-3">Measured Throughput</th>
-                            <th className="py-2 px-3">Packet Rate</th>
-                            <th className="py-2 px-3">Avg Latency</th>
-                            <th className="py-2 px-3">Jitter</th>
-                            <th className="py-2 px-3">Frame Loss</th>
-                            <th className="py-2 px-3">VoIP MOS</th>
-                            <th className="py-2 px-3">SLA Verdict</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {rfcResult.frame_matrix.map(row => (
-                            <tr key={row.frame_size_bytes} className="border-b border-slate-800/60 hover:bg-slate-900/50">
-                              <td className="py-2 px-3 font-bold text-white">{row.frame_size_bytes} Bytes</td>
-                              <td className="py-2 px-3 text-cyan-400">{row.line_efficiency_pct}%</td>
-                              <td className="py-2 px-3 text-emerald-400 font-bold">{row.throughput_mbps.toLocaleString()} Mbps</td>
-                              <td className="py-2 px-3 text-purple-300">{row.packet_rate_kpps.toLocaleString()} kpps</td>
-                              <td className="py-2 px-3 text-amber-300">{row.lat_avg_us} us</td>
-                              <td className="py-2 px-3 text-slate-300">{row.jitter_us} us</td>
-                              <td className="py-2 px-3 text-emerald-400">{row.drop_pct}%</td>
-                              <td className="py-2 px-3 text-cyan-300">{row.mos_score}</td>
-                              <td className="py-2 px-3">
-                                <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold">
-                                  {row.status}
-                                </span>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-
-                {/* Portable Field Diagnostics Toolkit */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {/* Path-MTU Blackhole Finder */}
-                  <div className="glass-card rounded-2xl p-4 space-y-3">
-                    <h3 className="text-sm font-bold text-white">🔍 Path-MTU Blackhole Finder</h3>
-                    <p className="text-xs text-slate-400">
-                      Sweeps Don't-Fragment (`DF`) ICMP frames up to 9000B to verify standard 1500B and Jumbo Frame switching.
-                    </p>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={diagTargetIp}
-                        onChange={e => setDiagTargetIp(e.target.value)}
-                        placeholder="Target IP (e.g. 10.20.30.1)"
-                        className="flex-1 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-mono text-white"
-                      />
-                      <button
-                        disabled={diagLoading}
-                        onClick={async () => {
-                          setDiagLoading(true);
-                          const r = await fetch("/api/diagnostics/mtu", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ target: diagTargetIp }),
-                          }).then(res => res.json());
-                          setMtuResult(r);
-                          setDiagLoading(false);
-                        }}
-                        className="px-3 py-1.5 rounded-lg bg-cyan-500 text-slate-950 font-bold text-xs"
-                      >
-                        Test MTU
-                      </button>
-                    </div>
-                    {mtuResult && (
-                      <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 text-xs font-mono space-y-1">
-                        <div>Target: <strong className="text-cyan-300">{mtuResult.target}</strong></div>
-                        <div>Max Working MTU: <strong className="text-emerald-400">{mtuResult.discovered_mtu} Bytes</strong></div>
-                        <div>1500B Standard: <strong>{mtuResult.standard_1500_ok ? "✅ PASS" : "❌ BLOCKED"}</strong></div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Gateway RTT & DNS Benchmark */}
-                  <div className="glass-card rounded-2xl p-4 space-y-3">
-                    <h3 className="text-sm font-bold text-white">🌐 Site Gateway & DNS Health Check</h3>
-                    <p className="text-xs text-slate-400">
-                      Measures default gateway ping RTT and multi-query DNS resolution speed at the current DHCP site.
-                    </p>
-                    <button
-                      disabled={diagLoading}
-                      onClick={async () => {
-                        setDiagLoading(true);
-                        const r = await fetch("/api/diagnostics/dns-gateway", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ domain: "github.com" }),
-                        }).then(res => res.json());
-                        setDnsGwResult(r);
-                        setDiagLoading(false);
-                      }}
-                      className="w-full py-2 rounded-lg bg-emerald-500 text-slate-950 font-bold text-xs"
-                    >
-                      Run Site Gateway & DNS Audit
-                    </button>
-                    {dnsGwResult && (
-                      <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 text-xs font-mono space-y-1">
-                        <div>Default Gateway: <strong className="text-cyan-300">{dnsGwResult.gateway_ip}</strong> ({dnsGwResult.gateway_rtt_ms ?? "N/A"} ms)</div>
-                        <div>DNS Avg Lookup: <strong className="text-emerald-400">{dnsGwResult.dns_avg_ms ?? "N/A"} ms</strong></div>
-                        <div>Resolved IP: <strong className="text-slate-300">{dnsGwResult.resolved_ip || "Offline"}</strong></div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Built-in iPerf3 & Live Wireshark PCAP Capture */}
-                  <div className="glass-card rounded-2xl p-4 space-y-3">
-                    <h3 className="text-sm font-bold text-white">⚡ iPerf3 & Wireshark `.pcap` Capture</h3>
-                    <p className="text-xs text-slate-400">
-                      iPerf3 Server is always listening on Port <code className="text-cyan-300">5201</code>. Run a local/remote speed test or grab a live `.pcap` file.
-                    </p>
-                    <div className="flex gap-2">
-                      <button
-                        disabled={diagLoading}
-                        onClick={async () => {
-                          setDiagLoading(true);
-                          const r = await fetch("/api/diagnostics/iperf3", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ server_ip: "127.0.0.1", duration: 3, parallel: 4 }),
-                          }).then(res => res.json());
-                          setIperfResult(r);
-                          setDiagLoading(false);
-                        }}
-                        className="flex-1 py-2 rounded-lg bg-purple-500 text-white font-bold text-xs"
-                      >
-                        Run iPerf3 Benchmark
-                      </button>
-                      <a
-                        href="/api/diagnostics/pcap?interface=enp216s0&count=200"
-                        className="px-3 py-2 rounded-lg bg-amber-500/20 border border-amber-500/50 text-amber-300 font-mono font-bold text-xs"
-                      >
-                        ⬇ Grab .PCAP
-                      </a>
-                    </div>
-                    {iperfResult && (
-                      <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 text-xs font-mono space-y-1">
-                        <div>TX Speed: <strong className="text-cyan-300">{iperfResult.tx_gbps} Gbps ({iperfResult.tx_mbps} Mbps)</strong></div>
-                        <div>RX Speed: <strong className="text-emerald-400">{iperfResult.rx_gbps} Gbps</strong></div>
-                        <div>Retransmits: <strong>{iperfResult.retransmits}</strong></div>
-                      </div>
-                    )}
-                  </div>
-                </div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Test Name</th>
+                      <th>Users</th>
+                      <th>Throughput</th>
+                      <th>Latency</th>
+                      <th>Loss</th>
+                      <th>Outcome</th>
+                      <th>PDF</th>
+                    </tr>
+                  </thead>
+                  <tbody id="dashRecentRunsBody"></tbody>
+                </table>
               </div>
-            )}
+            </div>
+          </div>
 
-            {/* =====================================================================
-                TAB 4: TEST SCHEDULER & HISTORY (CRON JOBS + CSV/PDF EXPORTS)
-               ===================================================================== */}
-            {activeTab === "history" && (
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-                {/* Left 4 Cols: Schedule Recurring Cron / Timed Test */}
-                <div className="lg:col-span-4 glass-card rounded-2xl p-5 space-y-4">
-                  <h2 className="text-base font-extrabold text-white">⏰ Schedule Automated Cron Test</h2>
-                  <div className="space-y-3 text-xs">
-                    <div>
-                      <label className="text-slate-400 font-mono block mb-1">Job Name</label>
-                      <input
-                        type="text"
-                        value={newJob.name}
-                        onChange={e => setNewJob({ ...newJob, name: e.target.value })}
-                        className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white"
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-slate-400 font-mono block mb-1">Cron Schedule</label>
-                        <input
-                          type="text"
-                          value={newJob.cron_expr}
-                          onChange={e => setNewJob({ ...newJob, cron_expr: e.target.value })}
-                          placeholder="0 2 * * *"
-                          className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-cyan-300"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-slate-400 font-mono block mb-1">Profile</label>
-                        <select
-                          value={newJob.profile_id}
-                          onChange={e => setNewJob({ ...newJob, profile_id: e.target.value })}
-                          className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white"
-                        >
-                          {profiles.map(p => (
-                            <option key={p.id} value={p.id}>{p.short_name}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2">
-                      <div>
-                        <label className="text-slate-400 font-mono block mb-1">Rate %</label>
-                        <input
-                          type="number"
-                          value={newJob.rate_pct}
-                          onChange={e => setNewJob({ ...newJob, rate_pct: Number(e.target.value) })}
-                          className="w-full px-2 py-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-white"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-slate-400 font-mono block mb-1">Duration (s)</label>
-                        <input
-                          type="number"
-                          value={newJob.duration_sec}
-                          onChange={e => setNewJob({ ...newJob, duration_sec: Number(e.target.value) })}
-                          className="w-full px-2 py-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-white"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-slate-400 font-mono block mb-1">Users</label>
-                        <input
-                          type="number"
-                          value={newJob.simulated_users}
-                          onChange={e => setNewJob({ ...newJob, simulated_users: Number(e.target.value) })}
-                          className="w-full px-2 py-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-white"
-                        />
-                      </div>
-                    </div>
-                    <button
-                      onClick={async () => {
-                        await fetch("/api/schedules", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify(newJob),
-                        });
-                        const sRes = await fetch("/api/schedules").then(r => r.json());
-                        if (sRes.schedules) setSchedules(sRes.schedules);
-                        showToast("Scheduled job saved to SQLite!", "success");
-                      }}
-                      className="w-full py-2.5 rounded-xl bg-cyan-500 text-slate-950 font-extrabold uppercase tracking-wider"
-                    >
-                      + Add Scheduled Cron Test
-                    </button>
-                  </div>
-
-                  {/* Active Scheduled Jobs List */}
-                  <div className="pt-3 border-t border-slate-800 space-y-2">
-                    <h3 className="text-xs font-bold uppercase text-slate-400">Upcoming Scheduled Jobs</h3>
-                    {schedules.map(job => (
-                      <div key={job.id} className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 flex items-center justify-between">
-                        <div>
-                          <div className="text-xs font-bold text-white">{job.name}</div>
-                          <div className="text-[11px] font-mono text-cyan-400">
-                            Cron: {job.cron_expr} • {job.profile_id.toUpperCase()} @ {job.rate_pct}% ({job.duration_sec}s)
-                          </div>
-                        </div>
-                        <button
-                          onClick={async () => {
-                            await fetch(`/api/schedules/${job.id}`, { method: "DELETE" });
-                            setSchedules(schedules.filter(s => s.id !== job.id));
-                          }}
-                          className="text-xs text-rose-400 hover:underline font-mono"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Right 8 Cols: Historical Test Runs Table with 1-Click CSV & PDF Report Downloads */}
-                <div className="lg:col-span-8 glass-card rounded-2xl p-5">
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <h2 className="text-base font-extrabold text-white">📊 Historical Test Runs & Executive Reports</h2>
-                      <p className="text-xs text-slate-400">
-                        All runs and 1-second telemetry time-series are persisted in SQLite. Download CSV raw data or branded PDF reports anytime.
-                      </p>
-                    </div>
-                    <button
-                      onClick={async () => {
-                        const r = await fetch("/api/runs").then(res => res.json());
-                        if (r.runs) setRuns(r.runs);
-                      }}
-                      className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs font-mono text-cyan-300"
-                    >
-                      ↻ Refresh
-                    </button>
-                  </div>
-
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs border-collapse">
-                      <thead>
-                        <tr className="border-b border-slate-800 text-slate-400 font-mono">
-                          <th className="py-2.5 px-3">ID</th>
-                          <th className="py-2.5 px-3">Test Run Name & Scale</th>
-                          <th className="py-2.5 px-3">Mode</th>
-                          <th className="py-2.5 px-3">Peak Throughput</th>
-                          <th className="py-2.5 px-3">Avg Latency</th>
-                          <th className="py-2.5 px-3">Loss %</th>
-                          <th className="py-2.5 px-3">Verdict</th>
-                          <th className="py-2.5 px-3 text-right">Export Reports</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {runs.map(run => {
-                          const sum = run.summary || {};
-                          const peakBps = formatBps(sum.max_tx_bps || 0);
-                          return (
-                            <tr key={run.id} className="border-b border-slate-800/60 hover:bg-slate-900/60">
-                              <td className="py-3 px-3 font-mono font-bold text-cyan-400">#{run.id}</td>
-                              <td className="py-3 px-3">
-                                <div className="font-bold text-white">{run.name}</div>
-                                <div className="text-[11px] font-mono text-slate-400">
-                                  {run.simulated_users?.toLocaleString()} Users • {run.simulated_devices?.toLocaleString()} Devices • {run.duration_sec}s
-                                </div>
-                              </td>
-                              <td className="py-3 px-3 font-mono uppercase text-slate-300">{run.test_mode}</td>
-                              <td className="py-3 px-3 font-mono font-bold text-emerald-400">{peakBps.full}</td>
-                              <td className="py-3 px-3 font-mono text-amber-300">{sum.lat_avg_us ?? 0} us</td>
-                              <td className="py-3 px-3 font-mono text-slate-300">{sum.drop_pct ?? 0}%</td>
-                              <td className="py-3 px-3 font-mono">
-                                <span className={`px-2 py-0.5 rounded font-bold ${
-                                  run.verdict === "PASS" ? "bg-emerald-500/20 text-emerald-300" : "bg-amber-500/20 text-amber-300"
-                                }`}>
-                                  {run.verdict || "PASS"}
-                                </span>
-                              </td>
-                              <td className="py-3 px-3 text-right space-x-1.5 whitespace-nowrap">
-                                <a
-                                  href={`/api/runs/${run.id}/export/csv`}
-                                  className="inline-block px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 font-mono text-[11px]"
-                                >
-                                  ⬇ CSV
-                                </a>
-                                <a
-                                  href={`/api/runs/${run.id}/export/pdf`}
-                                  className="inline-block px-2.5 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 font-mono font-bold text-[11px]"
-                                >
-                                  📄 PDF Report
-                                </a>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
+          <!-- Row 4: System Health Footer -->
+          <div class="health-strip">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1769D2" stroke-width="2"><rect x="2" y="3" width="20" height="7" rx="1"/><rect x="2" y="14" width="20" height="7" rx="1"/><circle cx="6" cy="6.5" r="1"/><circle cx="6" cy="17.5" r="1"/></svg>
+              <div>
+                <div style="font-weight:700;font-size:13px;">System Health &mdash; Dell PowerEdge R640</div>
+                <div style="font-size:11.5px;color:var(--text-secondary);">Dual Xeon Silver 4110 (32 Threads)</div>
               </div>
-            )}
-
-            {/* =====================================================================
-                TAB 5: R640 HARDWARE INVENTORY & APPLIANCE CONFIGURATION OPTIONS
-               ===================================================================== */}
-            {activeTab === "hardware" && (
-              <div className="space-y-5">
-                {/* Physical Network Interface Inventory Cards (1x 10GbE + 4x 1GbE) */}
-                <div className="glass-card rounded-2xl p-5">
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                    <div>
-                      <h2 className="text-base font-extrabold text-white">
-                        🔌 Dell PowerEdge R640 Network Interface Discovery (1x 10GbE + 4x 1GbE)
-                      </h2>
-                      <p className="text-xs text-slate-400">
-                        All 5 ports are configured in Netplan for automatic Portable DHCP on boot with Management NIC Lockout Protection.
-                      </p>
-                    </div>
-                    <button
-                      onClick={async () => {
-                        const hw = await fetch("/api/hardware").then(r => r.json());
-                        setHardware(hw);
-                        showToast("Refreshed PCIe NIC inventory & ethtool link diagnostics", "info");
-                      }}
-                      className="px-3.5 py-2 rounded-xl bg-cyan-500/20 border border-cyan-500/40 text-xs font-mono text-cyan-300"
-                    >
-                      ↻ Rescan Hardware & Link Status
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                    {interfaces.map(nic => {
-                      const up = nic.operstate === "UP" || nic.link_detected;
-                      return (
-                        <div key={nic.ifname} className={`rounded-xl p-4 border ${
-                          up ? "bg-slate-900/90 border-emerald-500/40" : "bg-slate-900/50 border-slate-800"
-                        }`}>
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <span className={`w-3 h-3 rounded-full ${up ? "bg-emerald-400 led-blink" : "bg-rose-500"}`}></span>
-                              <span className="text-sm font-mono font-extrabold text-white">{nic.ifname}</span>
-                              <span className="text-xs font-mono px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-300">
-                                {nic.max_speed_label}
-                              </span>
-                            </div>
-                            {nic.is_management && (
-                              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                                🛡️ MGMT PROTECTED
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="text-xs text-slate-300 font-semibold mt-2 truncate">{nic.description}</div>
-
-                          <div className="mt-2.5 space-y-1 text-xs font-mono text-slate-400">
-                            <div>PCIe Slot: <span className="text-slate-200">{nic.pci_address}</span> • Driver: <span className="text-cyan-300">{nic.driver}</span></div>
-                            <div>MAC Addr: <span className="text-slate-200">{nic.mac}</span> • MTU: <span className="text-slate-200">{nic.mtu}</span></div>
-                            <div>Link Speed: <span className={up ? "text-emerald-400 font-bold" : "text-rose-400"}>{nic.speed_label} ({nic.duplex})</span></div>
-                            <div>DHCP IPv4: <span className="text-cyan-400 font-bold">{(nic.ipv4 && nic.ipv4.length) ? nic.ipv4.join(", ") : "Waiting for Carrier / DHCP"}</span></div>
-                          </div>
-
-                          {nic.speed_warning && (
-                            <div className="mt-2.5 p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[11px] font-mono text-amber-300">
-                              ⚠️ {nic.speed_warning}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Appliance Configuration & Cisco TRex /etc/trex_cfg.yaml Editor */}
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-                  <div className="lg:col-span-6 glass-card rounded-2xl p-5 space-y-4">
-                    <h3 className="text-base font-extrabold text-white">⚙️ Appliance & Portable Field Configuration</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                      <div>
-                        <label className="text-slate-400 font-mono block mb-1">Appliance Header Title</label>
-                        <input
-                          type="text"
-                          value={settings.appliance_name}
-                          onChange={e => setSettings({ ...settings, appliance_name: e.target.value })}
-                          className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-slate-400 font-mono block mb-1">Current Field Site Name</label>
-                        <input
-                          type="text"
-                          value={settings.site_label}
-                          onChange={e => setSettings({ ...settings, site_label: e.target.value })}
-                          className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-slate-400 font-mono block mb-1">Default Link Capacity Reference</label>
-                        <select
-                          value={settings.default_link_capacity_mbps}
-                          onChange={e => {
-                            const cap = Number(e.target.value);
-                            setSettings({ ...settings, default_link_capacity_mbps: cap });
-                            setLinkCapacityMbps(cap);
-                          }}
-                          className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-cyan-300"
-                        >
-                          <option value={10000}>10 Gbps (10GbE Line Rate)</option>
-                          <option value={1000}>1 Gbps (1GbE Line Rate)</option>
-                          <option value={100}>100 Mbps (Fast Ethernet)</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="text-slate-400 font-mono block mb-1">Zero-Config mDNS Hostname</label>
-                        <input
-                          type="text"
-                          readOnly
-                          value="http://stephan-tester.local"
-                          className="w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-slate-800 font-mono text-emerald-400"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-2 pt-2">
-                      <label className="flex items-center gap-2.5 text-xs text-slate-200 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={settings.protect_mgmt_nic}
-                          onChange={e => setSettings({ ...settings, protect_mgmt_nic: e.target.checked })}
-                        />
-                        <span><strong>Management NIC Lockout Shield:</strong> Never allow DPDK to unbind the active DHCP Web UI interface</span>
-                      </label>
-                      <label className="flex items-center gap-2.5 text-xs text-slate-200 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={settings.lcd_ip_display}
-                          onChange={e => setSettings({ ...settings, lcd_ip_display: e.target.checked })}
-                        />
-                        <span><strong>Dell R640 Front LCD IP Display:</strong> Push live DHCP IP address to server front LCD panel on boot</span>
-                      </label>
-                      <label className="flex items-center gap-2.5 text-xs text-slate-200 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={settings.safety_watchdog_enabled}
-                          onChange={e => setSettings({ ...settings, safety_watchdog_enabled: e.target.checked })}
-                        />
-                        <span><strong>Safety Dead-Man Watchdog:</strong> Auto-throttle if frame loss exceeds {settings.safety_max_drop_pct}%</span>
-                      </label>
-                    </div>
-
-                    <button
-                      onClick={async () => {
-                        await fetch("/api/config/settings", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify(settings),
-                        });
-                        showToast("Appliance configuration saved to SQLite!", "success");
-                      }}
-                      className="w-full py-2.5 rounded-xl bg-emerald-500 text-slate-950 font-extrabold text-xs uppercase tracking-wider"
-                    >
-                      💾 Save Appliance Configuration
-                    </button>
-                  </div>
-
-                  {/* Right 6 Cols: /etc/trex_cfg.yaml Generator & HugePages Status */}
-                  <div className="lg:col-span-6 glass-card rounded-2xl p-5 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-base font-extrabold text-white">🦖 Cisco TRex `/etc/trex_cfg.yaml` & HugePages</h3>
-                      <button
-                        onClick={async () => {
-                          const res = await fetch("/api/config/trex", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ mode: "auto", restart_service: true }),
-                          }).then(r => r.json());
-                          const hw = await fetch("/api/hardware").then(r => r.json());
-                          setHardware(hw);
-                          showToast(`Regenerated /etc/trex_cfg.yaml (${res.selected_mode}) & restarted TRex daemon!`, "success");
-                        }}
-                        className="px-3 py-1.5 rounded-lg bg-cyan-500 text-slate-950 font-bold text-xs"
-                      >
-                        ⚡ Auto-Generate & Restart TRex
-                      </button>
-                    </div>
-
-                    <pre className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-mono text-cyan-300 overflow-x-auto max-h-56">
-                      {hardware?.trex_cfg_yaml || "# Loading /etc/trex_cfg.yaml..."}
-                    </pre>
-                  </div>
-                </div>
+            </div>
+            <div>
+              <div style="display:flex;justify-content:space-between;font-size:12px;">
+                <span style="color:var(--text-secondary);font-weight:600;">CPU</span>
+                <strong id="hlthCpuTxt">0%</strong>
               </div>
-            )}
-          </main>
-        </div>
-      );
-    }
+              <div class="progress-track"><div class="progress-fill" id="hlthCpuBar" style="width:0%"></div></div>
+            </div>
+            <div>
+              <div style="display:flex;justify-content:space-between;font-size:12px;">
+                <span style="color:var(--text-secondary);font-weight:600;">Memory</span>
+                <strong id="hlthRamTxt">0% (0 / 500 GB)</strong>
+              </div>
+              <div class="progress-track"><div class="progress-fill" id="hlthRamBar" style="width:0%"></div></div>
+            </div>
+            <div>
+              <div style="display:flex;justify-content:space-between;font-size:12px;">
+                <span style="color:var(--text-secondary);font-weight:600;">Storage</span>
+                <strong id="hlthDiskTxt">6% (13 / 231 GB)</strong>
+              </div>
+              <div class="progress-track"><div class="progress-fill" id="hlthDiskBar" style="width:6%"></div></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px;" id="hlthSummaryBox">
+              <span class="status-chip-dot" id="hlthSummaryDot"></span>
+              <div>
+                <div style="font-weight:700;font-size:12.5px;" id="hlthSummaryTitle">All Systems Operational</div>
+                <div style="font-size:11px;color:var(--text-secondary);" id="hlthSummarySub">TRex Engine, NICs &amp; Monitoring running normally.</div>
+              </div>
+            </div>
+          </div>
+        </section>
 
-    const root = ReactDOM.createRoot(document.getElementById("root"));
-    root.render(<App />);
-  </script>
+        <!-- ==============================================================
+             PAGE 2: OVERVIEW -> LIVE MONITORING
+             ============================================================== -->
+        <section class="page-section" id="page-live-monitoring">
+          <div class="card" style="margin-bottom:14px;">
+            <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:14px;">
+              <div>
+                <div style="font-size:16px;font-weight:700;" id="lmHeaderTitle">Live Test &mdash; Real-Time Telemetry</div>
+                <div style="font-size:12.5px;color:var(--text-secondary);" id="lmHeaderSub">Idle &mdash; Start any test to inspect 250ms real-time streams</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:14px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="font-size:12px;font-weight:600;color:var(--text-secondary);">Live Rate Throttle:</span>
+                  <input type="range" min="1" max="100" value="50" id="lmRateSlider" style="width:140px;" onchange="App.adjustLiveRate(this.value)" oninput="document.getElementById('lmRateLbl').textContent=this.value+'%'" />
+                  <strong id="lmRateLbl" style="min-width:38px;">50%</strong>
+                </div>
+                <button class="btn btn-danger btn-sm" onclick="App.stopActiveTest('completed')">&#9632; Stop Test</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="subtab-bar" id="lmTabBar">
+            <button class="subtab-btn active" data-lmtab="performance" onclick="App.setLiveMonTab('performance')">Performance</button>
+            <button class="subtab-btn" data-lmtab="flows" onclick="App.setLiveMonTab('flows')">Stateful Flows &amp; Users</button>
+            <button class="subtab-btn" data-lmtab="latency" onclick="App.setLiveMonTab('latency')">Latency &amp; Jitter</button>
+            <button class="subtab-btn" data-lmtab="errors" onclick="App.setLiveMonTab('errors')">Errors &amp; TCP Stack</button>
+            <button class="subtab-btn" data-lmtab="correlation" onclick="App.setLiveMonTab('correlation')">UniFi Correlation</button>
+          </div>
+
+          <div class="card" style="margin-bottom:16px;">
+            <div class="card-header">
+              <div class="card-title" id="lmChartTitle">Real-Time Throughput (TX vs RX vs Target)</div>
+              <span class="badge badge-info" id="lmSourceBadge">250ms Stream</span>
+            </div>
+            <div id="liveMonMainChart" style="width:100%;height:330px;"></div>
+          </div>
+
+          <!-- Separate User / IP / Flow / Session / CPS Breakdown Cards -->
+          <div class="grid-4" id="lmMetricsGrid"></div>
+        </section>
+
+        <!-- Dynamic Studio, Results, Infrastructure & Administration Pages -->
+        <section class="page-section" id="page-quick-test"></section>
+        <section class="page-section" id="page-traffic-mix-builder"></section>
+        <section class="page-section" id="page-application-simulation"></section>
+        <section class="page-section" id="page-traffic-profiles"></section>
+        <section class="page-section" id="page-rfc2544-benchmark"></section>
+        <section class="page-section" id="page-stress-soak"></section>
+        <section class="page-section" id="page-test-scheduler"></section>
+
+        <section class="page-section" id="page-test-history"></section>
+        <section class="page-section" id="page-compare-tests"></section>
+        <section class="page-section" id="page-reports-exports"></section>
+
+        <section class="page-section" id="page-unifi-monitoring"></section>
+        <section class="page-section" id="page-network-topology"></section>
+        <section class="page-section" id="page-nics-ports"></section>
+        <section class="page-section" id="page-trex-engine"></section>
+        <section class="page-section" id="page-server-health"></section>
+
+        <section class="page-section" id="page-configuration"></section>
+        <section class="page-section" id="page-api-integrations"></section>
+        <section class="page-section" id="page-user-access"></section>
+        <section class="page-section" id="page-audit-logs"></section>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- Reusable Modal -->
+  <div class="modal-backdrop" id="appModalBackdrop" onclick="if(event.target===this)App.closeModal()">
+    <div class="modal-box">
+      <div class="modal-header">
+        <strong style="font-size:15px;" id="appModalTitle">Details</strong>
+        <button class="btn btn-outline btn-sm" onclick="App.closeModal()">Close</button>
+      </div>
+      <div class="modal-body" id="appModalBody"></div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="/static/app.js?v=4.0"></script>
+  <script src="/static/pages_studio.js?v=4.0"></script>
+  <script src="/static/pages_infra.js?v=4.0"></script>
 </body>
 </html>

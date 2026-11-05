@@ -13,8 +13,9 @@ python3 /opt/stephan-network-tester/scripts/discover_hardware.py --write-config 
 # 3. Update Dell R640 Front LCD & login banner with current DHCP IP
 /opt/stephan-network-tester/scripts/update_lcd_and_banner.sh >/dev/null 2>&1 || true
 
-# 4. Launch Cisco TRex in interactive/daemon server mode (--stl by default, configurable via /etc/default/trex-mode)
-TREX_MODE="--stl"
+# 4. Launch Cisco TRex in Advanced Stateful (--astf) mode by default for 10,000-user EFG testing
+#    (Can be switched dynamically to --stl via /etc/default/trex-mode for stateless RFC 2544 sweeps)
+TREX_MODE="--astf"
 if [ -f /etc/default/trex-mode ]; then
     source /etc/default/trex-mode
 fi
