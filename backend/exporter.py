@@ -2620,6 +2620,35 @@ def generate_capacity_report_pdf(state: Dict[str, Any], runs: Dict[Any, Any]) ->
         headline = "Breaking-point test: no result recorded"
     head_accent = C_BAD if outcome == "limit_found" else (C_GOOD if outcome == "no_limit_found" else "#64748B")
 
+    # ---------------- event framing (when the finder was run in event mode) -----
+    event = ((state.get("settings") or {}).get("event")) if isinstance((state.get("settings") or {}).get("event"), dict) else None
+    event_lines: List[str] = []
+    if event and _int(event.get("attendees")):
+        att = _int(event.get("attendees"))
+        pct = lambda u: (u / att * 100.0) if (u and att) else 0.0  # noqa: E731
+        on = float(event.get("online_pct") or 0) / 100.0
+        mbps = float(event.get("mbps_per_user") or 0)
+        cpp = float(event.get("conns_per_user") or 0)
+        need_bps = att * on * mbps * 1e6
+        need_conns = att * on * cpp
+        if outcome == "limit_found" and good_users and bad_users:
+            headline = f"Handled {good_users:,} attendees ({pct(good_users):.0f}% of your event) — broke at {bad_users:,} ({pct(bad_users):.0f}%)"
+        elif outcome == "limit_found" and bad_users:
+            headline = f"Broke at {bad_users:,} attendees — {pct(bad_users):.0f}% of your event"
+        elif outcome == "no_limit_found":
+            headline = f"Handled {tested_max:,} attendees ({pct(tested_max):.0f}% of your event) with no breaking point"
+        event_lines.append(
+            f"<b>Your event:</b> {att:,} attendees, {on * 100:.0f}% online at once, {mbps:g} Mbps per online person and {cpp:g} open connections per phone "
+            f"— at full size that is about <b>{_fmt_bps(need_bps)}</b> and <b>{need_conns:,.0f} open connections</b> through the network.")
+        if outcome == "no_limit_found" and tested_max >= att:
+            event_lines.append(f"<b>Verdict: the network carried your full event</b> and kept going to {pct(tested_max):.0f}% of it without breaking.")
+        elif outcome == "limit_found" and good_users and good_users >= att:
+            event_lines.append(f"<b>Verdict: the network can carry your full event</b>, with headroom: it stayed clean up to {pct(good_users):.0f}% "
+                               f"and broke at {pct(bad_users or 0):.0f}% of your expected crowd.")
+        elif outcome == "limit_found" and bad_users:
+            event_lines.append(f"<b>Verdict: this setup would NOT carry your full event.</b> Quality broke at about {pct(bad_users):.0f}% of your expected crowd "
+                               f"({bad_users:,} attendees)" + (f"; the last clean step was {pct(good_users):.0f}% ({good_users:,})." if good_users else "."))
+
     # ---------------- plain-English "what happened" ---------------------------
     moment = _cap_break_moment(bad_step["run"], s) if bad_step else None
     likely = _cap_likely_causes(good_step, bad_step, s) if bad_step else []
@@ -2675,6 +2704,7 @@ def generate_capacity_report_pdf(state: Dict[str, Any], runs: Dict[Any, Any]) ->
         what.append("The test stopped because of an error" + (f": {_esc(msg)}" if msg else "") + ".")
     if not steps:
         what = ["No steps were recorded, so there is nothing to analyse yet."]
+    what = event_lines + what
     if loopback:
         what.append(f"<b>Important:</b> traffic ran over the internal loopback test path, not through {_esc(dut)}, so "
                     + ("this limit belongs to the test server/loopback, not the firewall." if bad_step is not None else "these results describe the test server/loopback, not the firewall."))

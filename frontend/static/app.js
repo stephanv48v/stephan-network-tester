@@ -87,7 +87,7 @@ const HOME_PRESETS = [
   {
     id: 'breakit',
     title: 'Test my network until it breaks',
-    desc: 'One click: adds users and bandwidth until quality drops, then a detailed report. About 15–25 min.',
+    desc: 'Simulates your event crowd (phones, apps, open connections) from 10% to 200% until quality drops. Detailed report at the end.',
     action: 'runBreakIt',
   },
   {
@@ -455,35 +455,124 @@ const App = {
     } catch (_) {}
   },
 
-  // ---- One-click "test my network until it breaks" -------------------------
+  // ---- One-click "test my network until it breaks" — event-based -----------
+  EVENT_DEFAULTS: { attendees: 10000, online_pct: 70, mbps_per_user: 1.0, conns_per_user: 8, step_sec: 60 },
+
+  eventSettings() {
+    try {
+      return { ...this.EVENT_DEFAULTS, ...(JSON.parse(localStorage.getItem('nts_event') || '{}')) };
+    } catch (_) {
+      return { ...this.EVENT_DEFAULTS };
+    }
+  },
+
+  // Rough capacity of the current test path, so we can warn before starting
+  testPathCapacityGbps(f) {
+    const mode = ((f && f.topology_assessment) || {}).active_mode_code;
+    if (mode !== 'physical_lan_wan') return { gbps: 1.0, label: 'internal loopback (measured ~1 Gbps)' };
+    const ports = ((f && f.interfaces) || []).filter((i) => !i.is_management && i.operstate === 'up' && !String(i.ifname).startsWith('veth'));
+    const speeds = ports.map((p) => Number(p.speed_mbps || 0)).filter((v) => v > 0);
+    const gbps = speeds.length ? Math.min(...speeds) / 1000 : 1.0;
+    return { gbps, label: `test ports at ${gbps >= 1 ? gbps + ' Gbps' : gbps * 1000 + ' Mbps'}` };
+  },
+
   async runBreakIt() {
     const f = this.latest || {};
     if (f.running || (f.capacity || {}).running) {
       this.toast('A test is already running. Stop it first.', 'error');
       return;
     }
-    const path = this.trafficPath(f, 'trex_astf');
-    const msg = [
-      'Test my network until it breaks?',
-      '',
-      '• Starts at 10,000 users and adds 10,000 per step (up to 100,000).',
-      '• Bandwidth grows with the users (20 kbps each: 0.2 Gbps at 10K, 2 Gbps at 100K).',
-      '• Stops as soon as packet loss goes over 0.5%, latency over 50 ms, or less than 95% of traffic gets through — then narrows down the exact limit.',
-      '• Takes about 15–25 minutes. You get a detailed report at the end.',
-      path.cls === 'path-internal' ? '\nNote: the test ports are not cabled, so this will find the limit of the test server, not your gateway.' : '',
-    ].join('\n');
-    if (!confirm(msg)) return;
+    const e = this.eventSettings();
+    const num = (id, v, step, min, max) => `<input type="number" class="form-control" id="${id}" value="${v}" step="${step}" min="${min}" max="${max}" oninput="App.updateEventPreview()" />`;
+    this.openModal('Test my network until it breaks', `
+      <p style="font-size:13px;margin-bottom:12px;">Describe your event. The test simulates that crowd's phones — social media, uploads, video, messaging, web, calls, DNS —
+      with each phone keeping several connections open like real apps. It starts at 10% of your crowd and grows to 200%, stopping when quality drops,
+      then gives you a detailed report of what broke, when, and why.</p>
+      <div class="grid-4" style="gap:10px;">
+        <div class="form-group"><label class="form-label">Expected attendees</label>${num('evAttendees', e.attendees, 500, 100, 100000)}</div>
+        <div class="form-group"><label class="form-label">Online at the same time (%)</label>${num('evOnline', e.online_pct, 5, 1, 100)}</div>
+        <div class="form-group"><label class="form-label">Mbps per online person</label>
+          <select class="form-control" id="evMbps" onchange="App.updateEventPreview()">
+            ${[[0.25, 'Light — 0.25 (messaging, browsing)'], [0.5, 'Typical — 0.5 (event average)'], [1, 'Busy peak — 1.0 (half-time, everyone posting)'], [2, 'Heavy — 2.0 (lots of video)']]
+              .map(([v, l]) => `<option value="${v}" ${Number(e.mbps_per_user) === v ? 'selected' : ''}>${l}</option>`).join('')}
+          </select></div>
+        <div class="form-group"><label class="form-label">Open connections per phone</label>${num('evConns', e.conns_per_user, 1, 1, 50)}</div>
+      </div>
+      <div class="form-group" style="max-width:260px;"><label class="form-label">Seconds per step</label>${num('evStepSec', e.step_sec, 15, 30, 600)}</div>
+      <div id="evPreview"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+        <button class="btn btn-outline" onclick="App.closeModal()">Cancel</button>
+        <button class="btn btn-primary btn-breakit" onclick="App.startEventBreakIt()">&#9889; Start — test until it breaks</button>
+      </div>
+    `);
+    this.updateEventPreview();
+  },
+
+  readEventForm() {
+    const v = (id, d) => { const x = parseFloat(document.getElementById(id)?.value); return Number.isFinite(x) ? x : d; };
+    return {
+      attendees: Math.round(Math.min(100000, Math.max(100, v('evAttendees', 10000)))),
+      online_pct: Math.min(100, Math.max(1, v('evOnline', 70))),
+      mbps_per_user: Math.max(0.01, v('evMbps', 1)),
+      conns_per_user: Math.min(50, Math.max(1, Math.round(v('evConns', 8)))),
+      step_sec: Math.min(600, Math.max(30, Math.round(v('evStepSec', 60)))),
+    };
+  },
+
+  updateEventPreview() {
+    const box = document.getElementById('evPreview');
+    if (!box) return;
+    const e = this.readEventForm();
+    const f = this.latest || {};
+    const at = (pct) => {
+      const people = Math.round(e.attendees * pct / 100);
+      const online = Math.round(people * e.online_pct / 100);
+      return { people, online, gbps: online * e.mbps_per_user / 1000, conns: online * e.conns_per_user };
+    };
+    const full = at(100);
+    const twice = at(200);
+    const cap = this.testPathCapacityGbps(f);
+    const breaksAtPct = full.gbps > 0 ? Math.round((cap.gbps / full.gbps) * 100) : null;
+    const steps = [10, 25, 50, 75, 100, 125, 150, 175, 200];
+    const mins = Math.round((steps.length + 2) * (e.step_sec + 35) / 60);
+    const fmtG = (g) => (g >= 1 ? `${g.toFixed(2)} Gbps` : `${(g * 1000).toFixed(0)} Mbps`);
+    box.innerHTML = `
+      <div class="alert-banner info" style="margin:6px 0 0;"><div>
+        <strong>At your full event (${full.people.toLocaleString()} attendees):</strong> ${full.online.toLocaleString()} phones online,
+        about <strong>${fmtG(full.gbps)}</strong> and <strong>${full.conns.toLocaleString()} open connections</strong> through the gateway.
+        The test goes up to 200% (${twice.people.toLocaleString()} attendees, ${fmtG(twice.gbps)}, ${twice.conns.toLocaleString()} connections)
+        in ${steps.length} steps — about ${mins} minutes.
+      </div></div>
+      ${breaksAtPct !== null && breaksAtPct < 200 ? `
+      <div class="alert-banner warning" style="margin:8px 0 0;"><div>
+        <strong>Heads up — the test equipment may be the limit.</strong> Traffic currently runs over ${cap.label}, roughly ${fmtG(cap.gbps)}.
+        Your event needs ${fmtG(full.gbps)} at 100%, so the test will probably break around <strong>${breaksAtPct}%</strong> of your crowd because of the
+        test ports, not your network. The report will show this. For a full-scale result, fit the 10GbE card and cable it through the gateway.
+      </div></div>` : ''}
+      ${this.trafficPath(f, 'trex_astf').cls === 'path-internal' ? `
+      <div class="alert-banner warning" style="margin:8px 0 0;"><div>
+        <strong>Not through your gateway yet:</strong> the test ports have no cable, so this measures the test server only.
+      </div></div>` : ''}`;
+  },
+
+  async startEventBreakIt() {
+    const e = this.readEventForm();
+    localStorage.setItem('nts_event', JSON.stringify(e));
     try {
       await this.api('/api/capacity/start', {
         method: 'POST',
         body: JSON.stringify({
-          start_users: 10000, step_users: 10000, max_users: 100000, step_sec: 45, per_user_kbps: 20,
-          max_loss_pct: 0.5, max_latency_ms: 50, min_rx_ratio: 0.95, refine_steps: 2, label: 'One-click breaking-point test',
+          event: { attendees: e.attendees, online_pct: e.online_pct, mbps_per_user: e.mbps_per_user, conns_per_user: e.conns_per_user,
+            steps_pct: [10, 25, 50, 75, 100, 125, 150, 175, 200] },
+          step_sec: e.step_sec, max_loss_pct: 0.5, max_latency_ms: 50, min_rx_ratio: 0.95, refine_steps: 2,
+          label: `Event test — ${e.attendees.toLocaleString()} attendees`,
         }),
       });
-      this.toast('Started. Watch the progress here on Home or in Live View.', 'success');
-    } catch (e) {
-      this.toast(`Could not start: ${e.message}`, 'error');
+      this.closeModal();
+      this.toast('Started. Progress shows on Home and in Live View.', 'success');
+      this.navigate('dashboard');
+    } catch (err) {
+      this.toast(`Could not start: ${err.message}`, 'error');
     }
   },
 

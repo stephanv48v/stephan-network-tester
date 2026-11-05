@@ -101,7 +101,7 @@ class CapacityFinder:
                     "mbps_per_user": evn("mbps_per_user", 1.0, 0.01, 100.0),
                     "conns_per_user": evn("conns_per_user", 8, 1, 200),
                 }
-                pcts = ev_in.get("steps_pct") or [25, 50, 75, 100, 125, 150, 175, 200]
+                pcts = ev_in.get("steps_pct") or [10, 25, 50, 75, 100, 125, 150, 175, 200]
                 pcts = sorted({max(1, min(1000, int(p))) for p in pcts})
                 event["steps_pct"] = pcts
                 plan = sorted({max(1, min(MAX_SIMULATED_USERS, int(round(event["attendees"] * p / 100.0)))) for p in pcts})
