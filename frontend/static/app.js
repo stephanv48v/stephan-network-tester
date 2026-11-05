@@ -234,6 +234,41 @@ const App = {
     sel.innerHTML = this.profiles
       .map((p) => `<option value="${p.id}" ${p.id === 'imix' ? 'selected' : ''}>${p.short_name || p.name}</option>`)
       .join('');
+    this.updateDashEngineHint();
+  },
+
+  onDashProfileChange() {
+    const pid = document.getElementById('qtDashProfile')?.value;
+    const prof = (this.profiles || []).find((p) => p.id === pid);
+    const engSel = document.getElementById('qtDashEngine');
+    const gbpsSel = document.getElementById('qtDashTargetGbps');
+    const usrSel = document.getElementById('qtDashUsers');
+    if (prof && engSel && prof.traffic_engine) {
+      engSel.value = prof.traffic_engine;
+    }
+    if (prof && prof.traffic_engine === 'internet_wan') {
+      if (gbpsSel) gbpsSel.value = '0.1';
+      if (usrSel) usrSel.value = '500';
+    } else if (prof && gbpsSel && prof.target_gbps) {
+      const matchOpt = Array.from(gbpsSel.options).find((o) => Math.abs(parseFloat(o.value) - Number(prof.target_gbps)) < 0.01);
+      if (matchOpt) gbpsSel.value = matchOpt.value;
+    }
+    this.updateDashEngineHint();
+  },
+
+  updateDashEngineHint() {
+    const hint = document.getElementById('qtDashEngineHint');
+    const eng = document.getElementById('qtDashEngine')?.value;
+    if (!hint) return;
+    const topo = (this.latest && this.latest.topology_assessment) || {};
+    const cabled = topo.active_mode_code === 'physical_lan_wan';
+    if (eng === 'internet_wan' || eng === 'hybrid') {
+      hint.innerHTML = `<span style="color:#15803D;font-weight:600;">&#9679; Routes real WAN traffic out enp216s0 &rarr; 10.20.30.1 &rarr; Internet</span> (capped at 85% of active management link speed to protect UI).`;
+    } else if (!cabled) {
+      hint.innerHTML = `<span style="color:#D97706;font-weight:600;">&#9888; eno1–eno4 unplugged:</span> Runs on internal R640 loopback (<code>veth_trex0</code>). Choose <strong>Live Internet / WAN</strong> above to send traffic through <code>10.20.30.1</code> WAN, or cable <code>eno1</code>/<code>eno2</code>.`;
+    } else {
+      hint.innerHTML = `<span style="color:#15803D;font-weight:600;">&#9679; Physical LAN &harr; EFG &harr; WAN ports active.</span>`;
+    }
   },
 
   connectWebSocket() {

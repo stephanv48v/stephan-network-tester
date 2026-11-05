@@ -299,7 +299,7 @@ def init_db() -> None:
 
             # Clean up any orphaned 'running' runs from prior service restarts
             conn.execute(
-                "UPDATE test_runs SET status = 'interrupted', ended_at = ? WHERE status = 'running' AND ended_at IS NULL",
+                "UPDATE test_runs SET status = 'interrupted', verdict = 'INTERRUPTED', ended_at = ? WHERE status = 'running' AND ended_at IS NULL",
                 (time.time(),),
             )
             conn.commit()

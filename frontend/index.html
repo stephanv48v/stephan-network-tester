@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=4.0" />
+  <link rel="stylesheet" href="/static/styles.css?v=4.2" />
 </head>
 <body>
   <div class="app-shell">
@@ -346,7 +346,7 @@
               <div class="grid-2" style="gap:10px;">
                 <div class="form-group">
                   <label class="form-label">Profile</label>
-                  <select class="form-control" id="qtDashProfile"></select>
+                  <select class="form-control" id="qtDashProfile" onchange="App.onDashProfileChange()"></select>
                 </div>
                 <div class="form-group">
                   <label class="form-label">Users (Simulated)</label>
@@ -362,6 +362,7 @@
                 <div class="form-group">
                   <label class="form-label">Target Throughput</label>
                   <select class="form-control" id="qtDashTargetGbps">
+                    <option value="0.05">50 Mbps</option>
                     <option value="0.1">100 Mbps</option>
                     <option value="0.5">500 Mbps</option>
                     <option value="1.0">1.0 Gbps</option>
@@ -383,11 +384,13 @@
               </div>
               <div class="form-group">
                 <label class="form-label">Traffic Engine Mode</label>
-                <select class="form-control" id="qtDashEngine">
+                <select class="form-control" id="qtDashEngine" onchange="App.updateDashEngineHint()">
                   <option value="trex_astf" selected>Stateful ASTF (Realistic TCP/UDP User Sessions)</option>
                   <option value="trex_stl">Stateless STL (Wire-Speed L2-L4 Streams)</option>
                   <option value="internet_wan">Live Internet / WAN Gateway Traffic (via 10.20.30.1)</option>
+                  <option value="hybrid">Hybrid (TRex + Live Internet/WAN via 10.20.30.1)</option>
                 </select>
+                <div id="qtDashEngineHint" style="font-size:11px;color:var(--text-secondary);margin-top:5px;"></div>
               </div>
               <div style="display:flex;gap:8px;margin-top:6px;">
                 <button class="btn btn-primary" style="flex:1;" onclick="App.startFromDashboardQuickTest()">&#9654; Start Test</button>
@@ -542,8 +545,8 @@
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="/static/app.js?v=4.0"></script>
-  <script src="/static/pages_studio.js?v=4.0"></script>
-  <script src="/static/pages_infra.js?v=4.0"></script>
+  <script src="/static/app.js?v=4.2"></script>
+  <script src="/static/pages_studio.js?v=4.2"></script>
+  <script src="/static/pages_infra.js?v=4.2"></script>
 </body>
 </html>

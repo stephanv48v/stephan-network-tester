@@ -356,84 +356,94 @@ async def run_rfc2544_sweep(payload: Dict[str, Any]):
 
     frame_results: List[Dict[str, Any]] = []
     elapsed_counter = 0
+    sweep_status = "interrupted"
 
-    for fsz in frame_sizes:
-        fsz_int = max(64, min(9000, int(fsz)))
+    try:
+        for fsz in frame_sizes:
+            fsz_int = max(64, min(9000, int(fsz)))
 
-        def _start_trial(sz: int) -> None:
-            with engine._lock:
-                c = engine.client
-                c.reset(ports=[0, 1])
-                c.clear_stats(ports=[0, 1])
-                streams = engine._build_trex_stl_streams(
-                    PREBUILT_PROFILES["bw_1518b"],
-                    {"override_frame_size": sz, "simulated_users": 1000, "vlan_id": int(payload.get("vlan_id", 0) or 0)},
-                    port_idx=0,
-                )
-                c.add_streams(streams, ports=[0])
-                mult_str = f"{target_gbps:.3f}gbps" if target_gbps >= 1.0 else f"{max(1.0, target_gbps * 1000.0):.1f}mbps"
-                c.start(ports=[0], mult=mult_str, duration=trial_sec + 1)
+            def _start_trial(sz: int) -> None:
+                if engine.client is None or engine.client_mode != "STL" or not engine.trex_connected:
+                    engine.ensure_trex_daemon_mode("STL")
+                with engine._lock:
+                    c = engine.client
+                    if c is None:
+                        raise RuntimeError("Cisco TRex STL client unavailable on 127.0.0.1:4501")
+                    c.reset(ports=[0, 1])
+                    c.clear_stats(ports=[0, 1])
+                    streams = engine._build_trex_stl_streams(
+                        PREBUILT_PROFILES["bw_1518b"],
+                        {"override_frame_size": sz, "simulated_users": 1000, "vlan_id": int(payload.get("vlan_id", 0) or 0)},
+                        port_idx=0,
+                    )
+                    c.add_streams(streams, ports=[0])
+                    mult_str = f"{target_gbps:.3f}gbps" if target_gbps >= 1.0 else f"{max(1.0, target_gbps * 1000.0):.1f}mbps"
+                    c.start(ports=[0], mult=mult_str, duration=trial_sec + 1)
 
-        await asyncio.to_thread(_start_trial, fsz_int)
+            await asyncio.to_thread(_start_trial, fsz_int)
 
-        trial_samples: List[Dict[str, Any]] = []
-        for _ in range(trial_sec):
-            await asyncio.sleep(1.0)
-            elapsed_counter += 1
-            m = await asyncio.to_thread(engine._collect_real_trex_metrics)
-            mos = calculate_mos_score(m["lat_avg_us"], m["jitter_us"], m["drop_pct"])
-            sample_obj = {
-                "ts": time.time(),
-                "elapsed_sec": elapsed_counter,
-                "phase_name": f"{fsz_int}B",
-                "rate_pct": min(100.0, target_gbps * 10.0),
-                "target_bps": target_gbps * 1e9,
-                "tx_bps": m["tx_bps"],
-                "rx_bps": m["rx_bps"],
-                "tx_pps": m["tx_pps"],
-                "rx_pps": m["rx_pps"],
-                "tx_packets": m["tx_packets"],
-                "rx_packets": m["rx_packets"],
-                "dropped_packets": m["dropped_packets"],
-                "drop_pct": m["drop_pct"],
-                "lat_min_us": m["lat_min_us"],
-                "lat_avg_us": m["lat_avg_us"],
-                "p95_lat_us": m["p95_lat_us"],
-                "p99_lat_us": m["p99_lat_us"],
-                "lat_max_us": m["lat_max_us"],
-                "jitter_us": m["jitter_us"],
-                "mos_score": mos,
-                "cpu_pct": 0.0,
-                "ram_pct": 0.0,
-                "telemetry_source": f"Cisco TRex STL ({fsz_int}B Trial)",
-            }
-            trial_samples.append(sample_obj)
-            await asyncio.to_thread(db.insert_telemetry_sample, run_id, sample_obj)
+            trial_samples: List[Dict[str, Any]] = []
+            for _ in range(trial_sec):
+                await asyncio.sleep(1.0)
+                elapsed_counter += 1
+                m = await asyncio.to_thread(engine._collect_real_trex_metrics)
+                mos = calculate_mos_score(m["lat_avg_us"], m["jitter_us"], m["drop_pct"])
+                sample_obj = {
+                    "ts": time.time(),
+                    "elapsed_sec": elapsed_counter,
+                    "phase_name": f"{fsz_int}B",
+                    "rate_pct": min(100.0, target_gbps * 10.0),
+                    "target_bps": target_gbps * 1e9,
+                    "tx_bps": m["tx_bps"],
+                    "rx_bps": m["rx_bps"],
+                    "tx_pps": m["tx_pps"],
+                    "rx_pps": m["rx_pps"],
+                    "tx_packets": m["tx_packets"],
+                    "rx_packets": m["rx_packets"],
+                    "dropped_packets": m["dropped_packets"],
+                    "drop_pct": m["drop_pct"],
+                    "lat_min_us": m["lat_min_us"],
+                    "lat_avg_us": m["lat_avg_us"],
+                    "p95_lat_us": m["p95_lat_us"],
+                    "p99_lat_us": m["p99_lat_us"],
+                    "lat_max_us": m["lat_max_us"],
+                    "jitter_us": m["jitter_us"],
+                    "mos_score": mos,
+                    "cpu_pct": 0.0,
+                    "ram_pct": 0.0,
+                    "telemetry_source": f"Cisco TRex STL ({fsz_int}B Trial)",
+                }
+                trial_samples.append(sample_obj)
+                await asyncio.to_thread(db.insert_telemetry_sample, run_id, sample_obj)
 
-        def _stop_trial() -> None:
-            with engine._lock:
-                if engine.client is not None:
-                    engine.client.stop(ports=[0, 1])
+            def _stop_trial() -> None:
+                with engine._lock:
+                    if engine.client is not None and engine.client_mode == "STL":
+                        try:
+                            engine.client.stop(ports=[0, 1])
+                        except Exception:
+                            pass
 
-        await asyncio.to_thread(_stop_trial)
+            await asyncio.to_thread(_stop_trial)
 
-        last_s = trial_samples[-1]
-        avg_rx_mbps = sum(s["rx_bps"] for s in trial_samples) / len(trial_samples) / 1e6
-        avg_tx_mbps = sum(s["tx_bps"] for s in trial_samples) / len(trial_samples) / 1e6
-        avg_kpps = sum(s["rx_pps"] for s in trial_samples) / len(trial_samples) / 1e3
-        frame_results.append({
-            "frame_size_bytes": fsz_int,
-            "tx_mbps": round(avg_tx_mbps, 2),
-            "throughput_mbps": round(avg_rx_mbps, 2),
-            "packet_rate_kpps": round(avg_kpps, 2),
-            "lat_avg_us": round(last_s["lat_avg_us"], 2),
-            "p99_lat_us": round(last_s["p99_lat_us"], 2),
-            "jitter_us": round(last_s["jitter_us"], 2),
-            "drop_pct": round(last_s["drop_pct"], 4),
-            "status": "RECORDED" if not (thresholds and thresholds.get("enabled")) else ("PASS" if last_s["drop_pct"] <= float(thresholds.get("max_loss_pct", 0.1)) else "FAIL"),
-        })
-
-    summary = await asyncio.to_thread(db.finalize_test_run, run_id, "completed")
+            last_s = trial_samples[-1]
+            avg_rx_mbps = sum(s["rx_bps"] for s in trial_samples) / len(trial_samples) / 1e6
+            avg_tx_mbps = sum(s["tx_bps"] for s in trial_samples) / len(trial_samples) / 1e6
+            avg_kpps = sum(s["rx_pps"] for s in trial_samples) / len(trial_samples) / 1e3
+            frame_results.append({
+                "frame_size_bytes": fsz_int,
+                "tx_mbps": round(avg_tx_mbps, 2),
+                "throughput_mbps": round(avg_rx_mbps, 2),
+                "packet_rate_kpps": round(avg_kpps, 2),
+                "lat_avg_us": round(last_s["lat_avg_us"], 2),
+                "p99_lat_us": round(last_s["p99_lat_us"], 2),
+                "jitter_us": round(last_s["jitter_us"], 2),
+                "drop_pct": round(last_s["drop_pct"], 4),
+                "status": "RECORDED" if not (thresholds and thresholds.get("enabled")) else ("PASS" if last_s["drop_pct"] <= float(thresholds.get("max_loss_pct", 0.1)) else "FAIL"),
+            })
+        sweep_status = "completed"
+    finally:
+        summary = await asyncio.to_thread(db.finalize_test_run, run_id, sweep_status)
     await asyncio.to_thread(
         db.log_audit,
         "Benchmarking",

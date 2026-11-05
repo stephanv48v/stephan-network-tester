@@ -28,8 +28,8 @@ import httpx
 
 
 DEFAULT_DOWNLOAD_URLS = [
+    "https://speed.cloudflare.com/__down?bytes=50000000",
     "https://speed.cloudflare.com/__down?bytes=25000000",
-    "https://speed.cloudflare.com/__down?bytes=10000000",
 ]
 DEFAULT_UPLOAD_URL = "https://speed.cloudflare.com/__up"
 DEFAULT_WEB_URLS = [
@@ -194,8 +194,8 @@ class InternetTrafficEngine:
         self.active_connections = 0
 
     def _download_worker(self, worker_idx: int, total_dl_workers: int) -> None:
-        limits = httpx.Limits(max_keepalive_connections=4, max_connections=8)
-        with httpx.Client(verify=False, timeout=10.0, limits=limits, follow_redirects=True) as client:
+        limits = httpx.Limits(max_keepalive_connections=6, max_connections=12)
+        with httpx.Client(verify=False, timeout=15.0, limits=limits, follow_redirects=True) as client:
             while not self._stop_event.is_set() and self.running:
                 if self.target_bps <= 1000:
                     time.sleep(0.25)
@@ -208,27 +208,32 @@ class InternetTrafficEngine:
                         with client.stream("GET", url) as resp:
                             with self._lock:
                                 self.completed_requests += 1
-                            for chunk in resp.iter_bytes(chunk_size=32768):
+                            t_prev = time.perf_counter()
+                            for chunk in resp.iter_bytes(chunk_size=131072):
                                 if self._stop_event.is_set() or not self.running:
                                     break
+                                t_now = time.perf_counter()
+                                actual_dt = max(0.0, t_now - t_prev)
                                 n = len(chunk)
                                 with self._lock:
                                     self.app_rx_bytes += n
-                                # Pace per-worker download rate to match target_bps
-                                per_worker_bps = max(50_000.0, (self.target_bps * 0.75) / max(1, total_dl_workers))
+                                # Pace per-worker download rate to match 80% of target_bps (subtracting network read time)
+                                per_worker_bps = max(100_000.0, (self.target_bps * 0.80) / max(1, total_dl_workers))
                                 expected_dt = (n * 8.0) / per_worker_bps
-                                if expected_dt > 0.002:
-                                    time.sleep(min(0.25, expected_dt * 0.85))
+                                sleep_dt = expected_dt - actual_dt
+                                if sleep_dt > 0.002:
+                                    time.sleep(min(0.20, sleep_dt))
+                                t_prev = time.perf_counter()
                     finally:
                         with self._lock:
                             self.active_connections = max(0, self.active_connections - 1)
                 except Exception:
-                    time.sleep(0.3)
+                    time.sleep(0.25)
 
     def _upload_worker(self, worker_idx: int, total_ul_workers: int) -> None:
-        payload_size = 131072  # 128 KB chunks
+        payload_size = 262144  # 256 KB chunks for sustained upstream WAN load
         payload = b"SVV-NET-STUDIO-WAN-TEST-" * (payload_size // 24)
-        with httpx.Client(verify=False, timeout=10.0) as client:
+        with httpx.Client(verify=False, timeout=12.0) as client:
             while not self._stop_event.is_set() and self.running:
                 if self.target_bps <= 1000:
                     time.sleep(0.25)
@@ -247,16 +252,16 @@ class InternetTrafficEngine:
                         with self._lock:
                             self.app_tx_bytes += len(payload)
                             self.completed_requests += 1
-                        per_worker_bps = max(50_000.0, (self.target_bps * 0.25) / max(1, total_ul_workers))
+                        per_worker_bps = max(100_000.0, (self.target_bps * 0.25) / max(1, total_ul_workers))
                         expected_dt = (len(payload) * 8.0) / per_worker_bps
                         elapsed = time.perf_counter() - t0
-                        if expected_dt > elapsed:
-                            time.sleep(min(0.4, expected_dt - elapsed))
+                        if expected_dt > elapsed + 0.002:
+                            time.sleep(min(0.30, expected_dt - elapsed))
                     finally:
                         with self._lock:
                             self.active_connections = max(0, self.active_connections - 1)
                 except Exception:
-                    time.sleep(0.4)
+                    time.sleep(0.3)
 
     def _web_and_dns_worker(self) -> None:
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

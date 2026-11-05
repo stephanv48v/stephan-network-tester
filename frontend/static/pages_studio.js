@@ -75,11 +75,11 @@ const StudioPages = {
           <div class="grid-2" style="gap:12px;">
             <div class="form-group">
               <label class="form-label">Traffic Profile</label>
-              <select class="form-control" id="qtFullProfile">${profOpts}</select>
+              <select class="form-control" id="qtFullProfile" onchange="StudioPages.onQuickTestProfileChange()">${profOpts}</select>
             </div>
             <div class="form-group">
               <label class="form-label">Traffic Engine</label>
-              <select class="form-control" id="qtFullEngine">
+              <select class="form-control" id="qtFullEngine" onchange="StudioPages.runPrecheckFromQuickTest()">
                 <option value="trex_astf" selected>Cisco TRex ASTF (Stateful TCP/UDP Sessions)</option>
                 <option value="trex_stl">Cisco TRex STL (Stateless Wire-Speed)</option>
                 <option value="internet_wan">Live Internet / WAN Traffic (via 10.20.30.1)</option>
@@ -162,6 +162,22 @@ const StudioPages = {
         </div>
       </div>
     `;
+    this.runPrecheckFromQuickTest();
+  },
+
+  onQuickTestProfileChange() {
+    const pid = document.getElementById('qtFullProfile')?.value;
+    const prof = (App.profiles || []).find((p) => p.id === pid);
+    if (prof) {
+      const engEl = document.getElementById('qtFullEngine');
+      const gbpsEl = document.getElementById('qtFullGbps');
+      const usrEl = document.getElementById('qtFullUsers');
+      const nameEl = document.getElementById('qtFullRunName');
+      if (engEl && prof.traffic_engine) engEl.value = prof.traffic_engine;
+      if (gbpsEl && prof.target_gbps) gbpsEl.value = Number(prof.target_gbps).toFixed(2);
+      if (usrEl && prof.default_users) usrEl.value = prof.default_users;
+      if (nameEl) nameEl.value = `${prof.short_name || prof.name} — EFG Validation`;
+    }
     this.runPrecheckFromQuickTest();
   },
 

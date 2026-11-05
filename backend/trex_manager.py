@@ -552,7 +552,12 @@ class TRexEngineManager:
         prof = self._resolve_profile(profile_id)
 
         self.profile_id = profile_id
-        self.traffic_engine = str(req.get("traffic_engine") or req.get("traffic_mode") or prof.get("traffic_engine") or "trex_astf")
+        requested_engine = str(req.get("traffic_engine") or req.get("traffic_mode") or "").strip()
+        if prof.get("traffic_engine") == "internet_wan" and requested_engine not in ("internet_wan", "hybrid"):
+            # Selecting the dedicated Internet / WAN Gateway profile must always generate real WAN traffic
+            self.traffic_engine = "internet_wan"
+        else:
+            self.traffic_engine = requested_engine or str(prof.get("traffic_engine") or "trex_astf")
         self.direction = str(req.get("direction", "bidirectional" if self.traffic_engine == "trex_astf" else "unidirectional"))
         self.test_mode = str(req.get("test_mode") or req.get("mode") or ("phased" if self.traffic_engine == "trex_astf" else "timed"))
         self.simulated_users = max(1, min(65000, int(req.get("simulated_users", prof.get("default_users", 10000)))))
@@ -689,16 +694,23 @@ class TRexEngineManager:
         if self.traffic_engine in ("internet_wan", "hybrid"):
             inet_opts = req.get("internet_options") or {}
             mgmt_if = hw_snap.get("management_interface") or "enp216s0"
+            chosen_if = inet_opts.get("interface", mgmt_if)
             wan_mbps_opt = inet_opts.get("wan_target_mbps") or req.get("wan_target_mbps")
             inet_target_bps = (
                 float(wan_mbps_opt) * 1e6
                 if wan_mbps_opt
-                else min(self.base_target_bps, 500_000_000.0)
+                else min(self.base_target_bps, 1_000_000_000.0)
             )
+            # Protect SSH & WebSocket dashboard when transmitting over the active management NIC
+            for nic in hw_snap.get("interfaces", []):
+                if nic.get("ifname") == chosen_if and nic.get("is_management") and (nic.get("speed_mbps") or 0) > 0:
+                    safe_cap_bps = float(nic["speed_mbps"]) * 0.85 * 1_000_000.0
+                    inet_target_bps = min(inet_target_bps, safe_cap_bps)
+                    break
             internet_engine.configure_and_start(
-                interface=inet_opts.get("interface", mgmt_if),
+                interface=chosen_if,
                 target_bps=inet_target_bps,
-                worker_count=int(inet_opts.get("workers", 8)),
+                worker_count=int(inet_opts.get("workers", 12)),
                 enable_download=bool(inet_opts.get("enable_download", True)),
                 enable_upload=bool(inet_opts.get("enable_upload", True)),
                 enable_web=bool(inet_opts.get("enable_web", True)),
