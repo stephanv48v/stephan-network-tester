@@ -914,3 +914,16 @@ input[type="range"] {
 
 .sensor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
 .sensor-tile { background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: var(--radius-ctrl); padding: 10px 12px; }
+
+/* Codeblue wordmark (HTML + Nunito, matches the brand logo) */
+.cb-logo { display: inline-flex; flex-direction: column; align-items: flex-end; line-height: 1; user-select: none; }
+.cb-word { font-family: 'Nunito', 'Segoe UI', sans-serif; font-weight: 800; font-size: 31px; letter-spacing: 0.6px; color: #1B3F5E; display: flex; align-items: baseline; }
+.cb-power { width: 0.6em; height: 0.6em; margin: 0 0.03em 0 0.045em; align-self: baseline; transform: translateY(0.02em); fill: none; stroke: #8CC8F4; stroke-width: 3.1; stroke-linecap: round; }
+.cb-tag { font-family: 'Nunito', 'Segoe UI', sans-serif; font-weight: 700; font-size: 12.5px; color: #1B3F5E; margin-top: 2px; margin-right: 1.9em; letter-spacing: 0.2px; }
+.cb-on-dark .cb-word { color: #FFFFFF; }
+.cb-on-dark .cb-tag { color: #8CC8F4; }
+.cb-large .cb-word { font-size: 46px; }
+.cb-large .cb-tag { font-size: 17px; }
+.sidebar-brand.codeblue-brand { padding: 20px 20px 16px; }
+
+.codeblue-brand .brand-text-sub { color: #94A3B8; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 6px; }
