@@ -31,7 +31,6 @@ deploy_once() {
         fi
 
         cp "$REPO_DIR/systemd/trex-server.service" /etc/systemd/system/trex-server.service 2>/dev/null || true
-        cp "$REPO_DIR/systemd/trex-server.service" /etc/systemd/system/trex-engine.service 2>/dev/null || true
         cp "$REPO_DIR/systemd/stephan-tester-web.service" /etc/systemd/system/stephan-tester-web.service 2>/dev/null || true
         cp "$REPO_DIR/systemd/stephan-auto-deploy.service" /etc/systemd/system/stephan-auto-deploy.service 2>/dev/null || true
         systemctl daemon-reload || true

@@ -28,7 +28,7 @@ echo "[2/4] Installing systemd services (trex-server, trex-engine, stephan-teste
 systemctl stop nginx apache2 2>/dev/null || true
 systemctl disable nginx apache2 2>/dev/null || true
 cp /opt/stephan-network-tester/systemd/trex-server.service /etc/systemd/system/trex-server.service
-cp /opt/stephan-network-tester/systemd/trex-server.service /etc/systemd/system/trex-engine.service
+rm -f /etc/systemd/system/trex-engine.service
 cp /opt/stephan-network-tester/systemd/stephan-tester-web.service /etc/systemd/system/stephan-tester-web.service
 cp /opt/stephan-network-tester/systemd/stephan-auto-deploy.service /etc/systemd/system/stephan-auto-deploy.service
 systemctl daemon-reload
