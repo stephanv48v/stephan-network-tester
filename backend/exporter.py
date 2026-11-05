@@ -2862,13 +2862,15 @@ def generate_capacity_report_pdf(state: Dict[str, Any], runs: Dict[Any, Any]) ->
         nxt.append("Let the finder run to completion to find the limit.")
     if steps and all(x["peak_gw_cpu_pct"] is None for x in steps):
         nxt.append("Connect the read-only UniFi Network API so gateway CPU is recorded with each step (it makes the cause much clearer).")
+    # Keep the closing section (and its footnote) together so the footnote never lands alone on a new page
+    closing: List[Any] = []
     if nxt:
-        story.append(CondPageBreak(25 * mm))
-        story.append(Paragraph("Recommended next steps", st["h2"]))
+        closing.append(Paragraph("Recommended next steps", st["h2"]))
         for i, line in enumerate(nxt, 1):
-            story.append(Paragraph(line, st["bullet"], bulletText=f"{i}."))
-    story.append(Paragraph("The likely cause is inferred from simple rules over the measured numbers (throughput plateau, latency rise, connection plateau, gateway CPU); "
-                           "treat it as a lead to investigate, not a diagnosis.", st["note"]))
+            closing.append(Paragraph(line, st["bullet"], bulletText=f"{i}."))
+    closing.append(Paragraph("The likely cause is inferred from simple rules over the measured numbers (throughput plateau, latency rise, connection plateau, gateway CPU); "
+                             "treat it as a lead to investigate, not a diagnosis.", st["note"]))
+    story.append(KeepTogether(closing))
 
     label = "BREAKING-POINT TEST"
     doc.build(story, canvasmaker=lambda *a, **kw: _ReportNumberedCanvas(
