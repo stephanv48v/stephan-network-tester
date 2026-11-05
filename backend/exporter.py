@@ -20,9 +20,13 @@ import io
 import json
 from typing import Any, Dict, List, Optional
 
+from xml.sax.saxutils import escape as _esc
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+# NOTE: charts use fig.tight_layout()/fig.savefig() (not plt.*), because plt.* act on pyplot's global
+# "current figure", which is shared across the asyncio.to_thread workers rendering concurrent exports.
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -179,7 +183,7 @@ def generate_csv_bytes(run: Dict[str, Any]) -> bytes:
         "snmp_out_bps",
         "telemetry_source",
     ])
-    for s in run.get("samples", []):
+    for s in run.get("samples") or []:
         ts_iso = datetime.datetime.fromtimestamp(float(s.get("ts", 0))).isoformat()
         writer.writerow([
             s.get("elapsed_sec", 0),
@@ -298,9 +302,9 @@ def _chart_throughput(samples: List[Dict[str, Any]], target_bps: float) -> io.By
     ax.set_xlabel("Elapsed test time (seconds)", color="#64748B", fontsize=8)
     ax.set_ylim(bottom=0)
     ax.legend(loc="lower right", frameon=True, facecolor="#FFFFFF", edgecolor="#E2E8F0", fontsize=7.5)
-    plt.tight_layout()
+    fig.tight_layout()
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", facecolor="#FFFFFF")
+    fig.savefig(buf, format="png", facecolor="#FFFFFF")
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -330,9 +334,9 @@ def _chart_latency(samples: List[Dict[str, Any]]) -> io.BytesIO:
     ax.set_xlabel("Elapsed test time (seconds)", color="#64748B", fontsize=8)
     ax.set_ylim(bottom=0)
     ax.legend(loc="upper right", frameon=True, facecolor="#FFFFFF", edgecolor="#E2E8F0", fontsize=7.5)
-    plt.tight_layout()
+    fig.tight_layout()
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", facecolor="#FFFFFF")
+    fig.savefig(buf, format="png", facecolor="#FFFFFF")
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -373,9 +377,9 @@ def _chart_workload_donut(mix: Dict[str, Any]) -> io.BytesIO:
 
     ax_leg.axis("off")
     ax_leg.legend(wedges, labels, loc="center left", frameon=False, fontsize=8.5, labelcolor="#17243A")
-    plt.tight_layout()
+    fig.tight_layout()
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", facecolor="#FFFFFF")
+    fig.savefig(buf, format="png", facecolor="#FFFFFF")
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -423,9 +427,9 @@ def _chart_correlation(samples: List[Dict[str, Any]]) -> io.BytesIO:
 
     labels = [ln.get_label() for ln in lines]
     ax1.legend(lines, labels, loc="lower right", frameon=True, facecolor="#FFFFFF", edgecolor="#E2E8F0", fontsize=7.5)
-    plt.tight_layout()
+    fig.tight_layout()
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", facecolor="#FFFFFF")
+    fig.savefig(buf, format="png", facecolor="#FFFFFF")
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -523,9 +527,9 @@ def _kpi_card_row(cards: List[Dict[str, Any]], total_width_mm: float = 178.0) ->
     cell_tables = []
     for c in cards:
         accent = c.get("accent", "#1769D2")
-        lbl = str(c.get("label", "")).upper()
-        val = str(c.get("value", "—"))
-        sub = str(c.get("sub", ""))
+        lbl = _esc(str(c.get("label", "")).upper())
+        val = _esc(str(c.get("value", "—")))
+        sub = _esc(str(c.get("sub", "")))
 
         p = Paragraph(
             f"<font name='Helvetica-Bold' size='7.5' color='#64748B'>{lbl}</font><br/>"
@@ -572,7 +576,7 @@ def _styled_table(rows: List[List[Any]], col_widths_mm: List[float]) -> Table:
     formatted_rows = []
     for r_idx, row in enumerate(rows):
         formatted_rows.append([
-            Paragraph(str(col), hdr_style if r_idx == 0 else cell_style) if not isinstance(col, Paragraph) else col
+            Paragraph(_esc(str(col)), hdr_style if r_idx == 0 else cell_style) if not isinstance(col, Paragraph) else col
             for col in row
         ])
 
@@ -604,8 +608,8 @@ def _callout_box(title: str, body: str, tone: str = "info") -> Table:
     bg, brd, t_clr, b_clr = palettes.get(tone, palettes["info"])
     styles = getSampleStyleSheet()
     p = Paragraph(
-        f"<font name='Helvetica-Bold' size='8.5' color='{t_clr}'>{title}</font><br/>"
-        f"<font name='Helvetica' size='8.3' color='{b_clr}'>{body}</font>",
+        f"<font name='Helvetica-Bold' size='8.5' color='{t_clr}'>{_esc(str(title))}</font><br/>"
+        f"<font name='Helvetica' size='8.3' color='{b_clr}'>{_esc(str(body))}</font>",
         ParagraphStyle("callout", parent=styles["Normal"], leading=12.5),
     )
     t = Table([[p]], colWidths=[178 * mm])
@@ -678,7 +682,7 @@ def generate_pdf_bytes(
     if not thresholds_configured and verdict in ("PASS", "RECORDED"):
         verdict = "COMPLETED"
 
-    target_bps = float(cfg.get("base_target_bps") or cfg.get("target_bps") or (float(run.get("target_rate_pct", 50)) / 100.0 * 10e9))
+    target_bps = float(cfg.get("base_target_bps") or cfg.get("target_bps") or (float(run.get("target_rate_pct") or 50) / 100.0 * 10e9))
     avg_tx_bps = float(summary.get("avg_tx_bps") or 0.0)
     avg_rx_bps = float(summary.get("avg_rx_bps") or 0.0)
     max_tx_bps = float(summary.get("max_tx_bps") or 0.0)
@@ -722,8 +726,8 @@ def generate_pdf_bytes(
     banner_sub = f"{sim_users:,} simulated enterprise users  |  Target {_fmt_bps(target_bps)}  |  {run.get('profile_name', 'Enterprise Mix')}"
     cover_card = Table(
         [[Paragraph(
-            f"<font name='Helvetica-Bold' size='12.5' color='#0F1D31'>{banner_title}</font><br/>"
-            f"<font name='Helvetica' size='9.2' color='#64748B'>{banner_sub}</font>",
+            f"<font name='Helvetica-Bold' size='12.5' color='#0F1D31'>{_esc(str(banner_title))}</font><br/>"
+            f"<font name='Helvetica' size='9.2' color='#64748B'>{_esc(str(banner_sub))}</font>",
             ParagraphStyle("covb", parent=styles["Normal"], leading=16),
         )]],
         colWidths=[178 * mm],
@@ -748,7 +752,7 @@ def generate_pdf_bytes(
     ]
     for k, v in cover_fields:
         story.append(Paragraph(k, meta_lbl_style))
-        story.append(Paragraph(str(v), meta_val_style))
+        story.append(Paragraph(_esc(str(v)), meta_val_style))
 
     story.append(Spacer(1, 8 * mm))
     topo_snap = cfg.get("topology_snapshot") or {}
@@ -768,7 +772,7 @@ def generate_pdf_bytes(
     # =========================================================================
     story.append(Paragraph("Executive summary", h1_style))
     story.append(Paragraph(
-        f"Run #{run_id}: {_fmt_duration(summary.get('actual_duration_sec', run.get('duration_sec', 0)))} {run.get('profile_name', '')} ({sim_users:,} simulated users)",
+        f"Run #{run_id}: {_fmt_duration(summary.get('actual_duration_sec', run.get('duration_sec', 0)))} {_esc(str(run.get('profile_name') or ''))} ({sim_users:,} simulated users)",
         sub_style,
     ))
 
@@ -784,7 +788,7 @@ def generate_pdf_bytes(
     ]))
     story.append(Spacer(1, 3.5 * mm))
     story.append(_kpi_card_row([
-        {"label": "Latency / Avg", "value": f"{lat_avg:.2f} us" if lat_avg > 0 else "N/A", "sub": summary.get("telemetry_source", "TRex probe")[:32], "accent": "#1769D2"},
+        {"label": "Latency / Avg", "value": f"{lat_avg:.2f} us" if lat_avg > 0 else "N/A", "sub": str(summary.get("telemetry_source") or "TRex probe")[:32], "accent": "#1769D2"},
         {"label": "P99 Tail Latency", "value": f"{p99_lat:.2f} us" if p99_lat > 0 else "N/A", "sub": f"Jitter avg: {jitter_avg:.2f} us" if jitter_avg > 0 else "Histogram 99th pct", "accent": "#1769D2"},
         {"label": "Test Outcome", "value": verdict, "sub": verdict_sub, "accent": verdict_accent},
     ]))
@@ -792,8 +796,8 @@ def generate_pdf_bytes(
 
     story.append(Paragraph("Primary Objective Assessment", sec_style))
     efg_answer = (
-        f"This test exercised <b>{dut_name}</b> with <b>{sim_users:,} simulated enterprise users</b> "
-        f"({emulated_ips:,} distinct client IPv4 endpoints) using <b>{engine_label}</b>. "
+        f"This test exercised <b>{_esc(str(dut_name))}</b> with <b>{sim_users:,} simulated enterprise users</b> "
+        f"({emulated_ips:,} distinct client IPv4 endpoints) using <b>{_esc(str(engine_label))}</b>. "
         f"Across {summary.get('sample_count', len(samples))} recorded 1-second intervals, the appliance transmitted an average of "
         f"<b>{_fmt_bps(avg_tx_bps)}</b> (peak <b>{_fmt_bps(max_tx_bps)}</b>), received <b>{_fmt_bps(avg_rx_bps)}</b>, "
         f"established up to <b>{peak_est:,}</b> concurrent TCP sessions (<b>{peak_flows:,}</b> active L4 flows at <b>{peak_cps:,.1f} CPS</b>), "
@@ -831,7 +835,11 @@ def generate_pdf_bytes(
         story.append(Paragraph("Recorded throughput timeline and synthetic workload distribution", sub_style))
         story.append(_chart_card("Recorded Throughput Timeline", _chart_throughput(samples, target_bps), height_mm=62))
         story.append(Spacer(1, 4 * mm))
-        story.append(_chart_card("Configured Enterprise Workload Allocation", _chart_workload_donut(cfg.get("protocol_mix") or {}), height_mm=58))
+        if cfg.get("protocol_mix"):
+            story.append(_chart_card("Configured Enterprise Workload Allocation", _chart_workload_donut(cfg.get("protocol_mix")), height_mm=58))
+        else:
+            # normalize_mix_to_100({}) returns the DEFAULT mix; never chart a mix the run did not use
+            story.append(_callout_box("NO APPLICATION MIX CONFIGURED", "This run did not use an application workload mix (e.g. fixed-frame STL sweep).", tone="info"))
         doc.build(
             story,
             canvasmaker=lambda *a, **kw: _ReportNumberedCanvas(
@@ -953,7 +961,11 @@ def generate_pdf_bytes(
     story.append(Paragraph("Synthetic enterprise application-mix distribution and protocol modelling classification", sub_style))
 
     mix = cfg.get("protocol_mix") or {}
-    story.append(_chart_card("Configured Enterprise Workload Allocation (100% Normalized)", _chart_workload_donut(mix), height_mm=64))
+    if mix:
+        story.append(_chart_card("Configured Enterprise Workload Allocation (100% Normalized)", _chart_workload_donut(mix), height_mm=64))
+    else:
+        # normalize_mix_to_100({}) returns the DEFAULT mix; never chart a mix the run did not use
+        story.append(_callout_box("NO APPLICATION MIX CONFIGURED", "This run did not use an application workload mix (e.g. fixed-frame STL sweep).", tone="info"))
     story.append(Spacer(1, 4 * mm))
 
     story.append(Paragraph("Traffic profile methodology", sec_style))
@@ -1145,7 +1157,7 @@ def generate_comparison_pdf_bytes(comp: Dict[str, Any]) -> bytes:
     story.append(PageBreak())
 
     story.append(Paragraph("Side-by-side run comparison", h1_style))
-    story.append(Paragraph(f"Run #{ra['id']} ({ra.get('simulated_users', 0):,} users) vs Run #{rb['id']} ({rb.get('simulated_users', 0):,} users)", sub_style))
+    story.append(Paragraph(f"Run #{ra['id']} ({int(ra.get('simulated_users') or 0):,} users) vs Run #{rb['id']} ({int(rb.get('simulated_users') or 0):,} users)", sub_style))
 
     def _fmt_d(key: str, unit: str = "") -> str:
         d = deltas.get(key) or {}
@@ -1159,7 +1171,7 @@ def generate_comparison_pdf_bytes(comp: Dict[str, Any]) -> bytes:
 
     rows = [
         ["Metric", f"Run #{ra['id']} (Baseline)", f"Run #{rb['id']} (Comparison)", "Delta (B - A)"],
-        ["Simulated Users", f"{int(ra.get('simulated_users', 0)):,}", f"{int(rb.get('simulated_users', 0)):,}", f"{int(rb.get('simulated_users', 0)) - int(ra.get('simulated_users', 0)):+,}"],
+        ["Simulated Users", f"{int(ra.get('simulated_users') or 0):,}", f"{int(rb.get('simulated_users') or 0):,}", f"{int(rb.get('simulated_users') or 0) - int(ra.get('simulated_users') or 0):+,}"],
         ["Average TX Throughput", _fmt_bps(sa.get("avg_tx_bps", 0)), _fmt_bps(sb.get("avg_tx_bps", 0)), _fmt_d("avg_tx_mbps", " Mbps")],
         ["Average RX Throughput", _fmt_bps(sa.get("avg_rx_bps", 0)), _fmt_bps(sb.get("avg_rx_bps", 0)), _fmt_d("avg_rx_mbps", " Mbps")],
         ["Peak RX Throughput", _fmt_bps(sa.get("max_rx_bps", 0)), _fmt_bps(sb.get("max_rx_bps", 0)), _fmt_d("max_rx_mbps", " Mbps")],
@@ -1193,9 +1205,9 @@ def generate_comparison_pdf_bytes(comp: Dict[str, Any]) -> bytes:
     ax.set_xlabel("Elapsed seconds", color="#64748B", fontsize=8)
     ax.set_ylim(bottom=0)
     ax.legend(loc="lower right", frameon=True, facecolor="#FFFFFF", edgecolor="#E2E8F0", fontsize=8)
-    plt.tight_layout()
+    fig.tight_layout()
     c_buf = io.BytesIO()
-    plt.savefig(c_buf, format="png", facecolor="#FFFFFF")
+    fig.savefig(c_buf, format="png", facecolor="#FFFFFF")
     plt.close(fig)
     c_buf.seek(0)
 

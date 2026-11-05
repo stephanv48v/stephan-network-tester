@@ -17,29 +17,71 @@ const WORKLOAD_COLORS = {
   bulk_downloads: { label: 'Bulk Downloads', color: '#0284C7' },
 };
 
-const ROUTE_TITLES = {
-  'dashboard': ['Cisco TRex Network Test Studio', 'Traffic Generation • 10,000-User EFG Performance Testing • UniFi Stack Monitoring'],
-  'live-monitoring': ['Live Real-Time Monitoring', '250ms Stateful Flow, Session, Latency & UniFi Infrastructure Correlation'],
-  'quick-test': ['Quick Test Launcher', 'Configure & Launch Enterprise User Traffic Against UniFi EFG'],
-  'traffic-mix-builder': ['Traffic Mix Builder', 'Create Realistic Enterprise Profiles with Normalized 100% Application Allocations'],
-  'application-simulation': ['Application Simulation (10,000 Users)', 'Stateful ASTF User Behaviours, Separate Flow/Session Accounting & Live WAN Mode'],
-  'traffic-profiles': ['Traffic Profiles Library', 'Pre-Built Enterprise, Benchmark & Custom Saved Workload Profiles'],
-  'rfc2544-benchmark': ['RFC 2544-Style Frame-Size Benchmarking', 'Automated Cisco TRex STL Multi-Frame-Size Throughput & Latency Sweeps'],
-  'stress-soak': ['10,000-User EFG Stress & Soak Testing', 'Phased User Ramp-Up, Staged Load Steps (10%–100%) & Long-Duration Stability Runs'],
-  'test-scheduler': ['Automated Test Scheduler', 'Recurring Cron & One-Shot Scheduled Validation Jobs'],
-  'test-history': ['Recorded Test History', 'Immutable SQLite Run Archives, Telemetry Summaries & Threshold Verdicts'],
-  'compare-tests': ['Compare Test Runs', 'Side-by-Side Throughput, Latency, Flow & Gateway Utilisation Delta Analysis'],
-  'reports-exports': ['Client Reports & Exports', 'Multi-Page Light-Mode Executive & Technical PDF Reports, CSV & JSON Archives'],
-  'unifi-monitoring': ['UniFi Stack Monitoring', 'Read-Only Local UniFi Network API & Site Manager Gateway, Switch, AP & Client Telemetry'],
-  'network-topology': ['Interactive Network Topology', 'Live R640 <-> UniFi EFG <-> Switches <-> APs <-> WAN Path & Hardware Verification'],
-  'nics-ports': ['NICs & Physical Ports', 'Dell PowerEdge R640 PCIe Inventory, Link Speeds & Management Safety'],
-  'trex-engine': ['Cisco TRex Engine Control', 'Switch Between Stateful ASTF (--astf) & Stateless STL (--stl) Modes & Inspect /etc/trex_cfg.yaml'],
-  'server-health': ['Dell PowerEdge R640 Server Health', '32-Thread Xeon Utilisation, HugePages, NVMe Storage & Live Field Diagnostics'],
-  'configuration': ['Platform Configuration', 'Default Appliance Preferences, Safety Watchdogs & Operator Defaults'],
-  'api-integrations': ['API & Telemetry Integrations', 'Configure Encrypted Local UniFi API Key, Site Manager Cloud Key & Read-Only SNMPv2c/v3'],
-  'user-access': ['Operator & User Access', 'Manage Authorized Lab Administrators & Report Attribution Identities'],
-  'audit-logs': ['System Audit Logs', 'Chronological Trail of Test Executions, Configuration Changes & Exports'],
+// The sidebar has 6 sections. Each section groups related pages as tabs.
+const SECTIONS = {
+  home: { title: 'Home', sub: 'Status at a glance and one-click tests', routes: ['dashboard'] },
+  run: { title: 'Run a Test', sub: 'Pick a test type, set it up and start it', routes: ['quick-test', 'application-simulation', 'traffic-mix-builder', 'stress-soak', 'rfc2544-benchmark', 'traffic-profiles', 'test-scheduler'] },
+  live: { title: 'Live View', sub: 'Watch the running test in real time', routes: ['live-monitoring'] },
+  results: { title: 'Results & Reports', sub: 'Past tests, side-by-side comparison and PDF reports', routes: ['test-history', 'compare-tests', 'reports-exports'] },
+  network: { title: 'My Network', sub: 'UniFi devices, topology and server ports', routes: ['unifi-monitoring', 'network-topology', 'nics-ports'] },
+  system: { title: 'System & Settings', sub: 'Server health, TRex engine, integrations and settings', routes: ['server-health', 'trex-engine', 'api-integrations', 'configuration', 'user-access', 'audit-logs'] },
 };
+
+// Short tab labels for each page
+const ROUTE_LABELS = {
+  'dashboard': 'Home',
+  'live-monitoring': 'Live View',
+  'quick-test': 'Custom Test',
+  'application-simulation': 'App Simulation',
+  'traffic-mix-builder': 'Traffic Mix',
+  'stress-soak': 'Stress & Soak',
+  'rfc2544-benchmark': 'Benchmark (RFC 2544)',
+  'traffic-profiles': 'Saved Profiles',
+  'test-scheduler': 'Schedule',
+  'test-history': 'History',
+  'compare-tests': 'Compare',
+  'reports-exports': 'Reports',
+  'unifi-monitoring': 'UniFi',
+  'network-topology': 'Topology',
+  'nics-ports': 'Ports',
+  'server-health': 'Server Health',
+  'trex-engine': 'TRex Engine',
+  'api-integrations': 'Integrations',
+  'configuration': 'Settings',
+  'user-access': 'Users',
+  'audit-logs': 'Audit Log',
+};
+
+const sectionForRoute = (route) => Object.keys(SECTIONS).find((k) => SECTIONS[k].routes.includes(route));
+
+// One-click tests shown on the Home page
+const HOME_PRESETS = [
+  {
+    id: 'selftest',
+    title: 'Engine self-test',
+    desc: '30 s, 1 Gbps on the internal loopback. Checks TRex works.',
+    payload: { name: 'Engine self-test (loopback)', profile_id: 'bw_1518b', traffic_engine: 'trex_stl', test_mode: 'timed', duration_sec: 30, steady_sec: 30, target_gbps: 1.0, simulated_users: 500, simulated_devices: 1000 },
+  },
+  {
+    id: 'efg10k',
+    title: 'Firewall load test',
+    desc: '2 min realistic office traffic for the number of users above.',
+    usesUserBox: true,
+    payload: { scenario_id: 'scenario_10000_users', name: '10,000 users — gateway acceptance test', profile_id: 'imix', traffic_engine: 'trex_astf', test_mode: 'phased', simulated_users: 10000, simulated_devices: 20000, target_gbps: 5.0, ramp_up_sec: 20, steady_sec: 90, ramp_down_sec: 10 },
+  },
+  {
+    id: 'internet',
+    title: 'Internet speed & quality',
+    desc: '1 min of real downloads, DNS and latency through your WAN.',
+    payload: { name: 'Internet speed & quality', profile_id: 'internet_wan_mix', traffic_engine: 'internet_wan', test_mode: 'timed', duration_sec: 60, steady_sec: 60, target_gbps: 0.1, simulated_users: 500, simulated_devices: 1000 },
+  },
+  {
+    id: 'bench',
+    title: 'Frame-size benchmark',
+    desc: 'RFC 2544-style sweep, 64 B to 1518 B.',
+    route: 'rfc2544-benchmark',
+  },
+];
 
 const App = {
   currentRoute: 'dashboard',
@@ -87,34 +129,95 @@ const App = {
   },
 
   bindNavigation() {
-    document.querySelectorAll('.nav-item[data-route]').forEach((btn) => {
+    // Remember the last tab used in each section so clicking the section returns there
+    this.lastRouteBySection = {};
+    document.querySelectorAll('.nav-item[data-section]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        this.navigate(btn.getAttribute('data-route'));
+        const sec = btn.getAttribute('data-section');
+        this.navigate(this.lastRouteBySection[sec] || SECTIONS[sec].routes[0]);
       });
     });
+    window.addEventListener('hashchange', () => {
+      const r = location.hash.slice(1);
+      if (r && r !== this.currentRoute) this.navigate(r);
+    });
+    const startRoute = location.hash.slice(1);
+    if (startRoute && ROUTE_LABELS[startRoute]) setTimeout(() => this.navigate(startRoute), 0);
+  },
+
+  // Shared "number of users" field: free number entry (1 – MAX_USERS) plus quick-pick chips.
+  MAX_USERS: 100000,
+  usersField(id, value = 10000, onchange = '') {
+    const chips = [1000, 10000, 25000, 50000, 100000]
+      .map((n) => `<button type="button" class="chip-btn" onclick="App.setUsers('${id}', ${n})">${n >= 1000 ? n / 1000 + 'K' : n}</button>`)
+      .join('');
+    return `
+      <input type="number" class="form-control" id="${id}" min="1" max="${this.MAX_USERS}" step="1" value="${value}"
+        onchange="App.setUsers('${id}', this.value)${onchange ? ';' + onchange : ''}" />
+      <div class="chip-row">${chips}</div>`;
+  },
+
+  setUsers(id, n) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.value = this.clampUsers(n);
+    el.dispatchEvent(new Event('input'));
+  },
+
+  clampUsers(n) {
+    const v = Math.round(Number(String(n).replace(/[^\d.]/g, '')));
+    if (!Number.isFinite(v) || v < 1) return 1;
+    return Math.min(this.MAX_USERS, v);
+  },
+
+  readUsers(id, fallback = 10000) {
+    const el = document.getElementById(id);
+    if (!el || el.value === '') return fallback;
+    return this.clampUsers(el.value);
+  },
+
+  esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  },
+
+  renderSectionTabs(sectionKey, route) {
+    const bar = document.getElementById('sectionTabs');
+    if (!bar) return;
+    const routes = SECTIONS[sectionKey].routes;
+    if (routes.length < 2) {
+      bar.style.display = 'none';
+      return;
+    }
+    bar.style.display = 'flex';
+    bar.innerHTML = routes
+      .map((r) => `<button class="subtab-btn ${r === route ? 'active' : ''}" onclick="App.navigate('${r}')">${ROUTE_LABELS[r]}</button>`)
+      .join('');
   },
 
   navigate(route) {
-    if (!ROUTE_TITLES[route]) route = 'dashboard';
+    if (!ROUTE_LABELS[route]) route = 'dashboard';
     this.currentRoute = route;
+    const sectionKey = sectionForRoute(route) || 'home';
+    if (this.lastRouteBySection) this.lastRouteBySection[sectionKey] = route;
+    if (location.hash.slice(1) !== route) history.replaceState(null, '', `#${route}`);
 
-    document.querySelectorAll('.nav-item[data-route]').forEach((b) => {
-      b.classList.toggle('active', b.getAttribute('data-route') === route);
+    document.querySelectorAll('.nav-item[data-section]').forEach((b) => {
+      b.classList.toggle('active', b.getAttribute('data-section') === sectionKey);
     });
     document.querySelectorAll('.page-section').forEach((sec) => {
       sec.classList.toggle('active', sec.id === `page-${route}`);
     });
+    this.renderSectionTabs(sectionKey, route);
 
-    const [t, s] = ROUTE_TITLES[route];
-    document.getElementById('topbarTitle').textContent = t;
-    document.getElementById('topbarSubtitle').textContent = s;
+    document.getElementById('topbarTitle').textContent = SECTIONS[sectionKey].title;
+    document.getElementById('topbarSubtitle').textContent = SECTIONS[sectionKey].sub;
+    document.getElementById('pageViewport')?.scrollTo?.(0, 0);
 
     // Render route content
     if (route === 'dashboard') {
       this.refreshRunsSilent();
       setTimeout(() => {
         if (this.charts.dashTp) this.charts.dashTp.resize();
-        if (this.charts.dashMix) this.charts.dashMix.resize();
       }, 60);
     } else if (route === 'live-monitoring') {
       this.ensureLiveMonChart();
@@ -229,46 +332,43 @@ const App = {
   },
 
   populateDashQuickTest() {
-    const sel = document.getElementById('qtDashProfile');
-    if (!sel) return;
-    sel.innerHTML = this.profiles
-      .map((p) => `<option value="${p.id}" ${p.id === 'imix' ? 'selected' : ''}>${p.short_name || p.name}</option>`)
-      .join('');
-    this.updateDashEngineHint();
+    const list = document.getElementById('homePresetList');
+    if (list) {
+      list.innerHTML = HOME_PRESETS.map((p) => `
+        <button class="preset-btn" onclick="App.runPreset('${p.id}')">
+          <span class="preset-title">${p.title}</span>
+          <span class="preset-desc">${p.desc}</span>
+          <span class="preset-go">${p.route ? 'Open &rarr;' : '&#9654; Start'}</span>
+        </button>`).join('');
+    }
+    const ub = document.getElementById('homeUsersBox');
+    if (ub && !document.getElementById('homeUsers')) ub.innerHTML = this.usersField('homeUsers', 10000);
+    const host = document.getElementById('sbHostIp');
+    if (host) host.textContent = `Host: ${location.hostname}`;
   },
 
-  onDashProfileChange() {
-    const pid = document.getElementById('qtDashProfile')?.value;
-    const prof = (this.profiles || []).find((p) => p.id === pid);
-    const engSel = document.getElementById('qtDashEngine');
-    const gbpsSel = document.getElementById('qtDashTargetGbps');
-    const usrSel = document.getElementById('qtDashUsers');
-    if (prof && engSel && prof.traffic_engine) {
-      engSel.value = prof.traffic_engine;
+  async runPreset(id) {
+    const p = HOME_PRESETS.find((x) => x.id === id);
+    if (!p) return;
+    if (p.route) return this.navigate(p.route);
+    if (this.latest && this.latest.running) {
+      this.toast('A test is already running. Stop it first.', 'error');
+      return this.navigate('live-monitoring');
     }
-    if (prof && prof.traffic_engine === 'internet_wan') {
-      if (gbpsSel) gbpsSel.value = '0.1';
-      if (usrSel) usrSel.value = '500';
-    } else if (prof && gbpsSel && prof.target_gbps) {
-      const matchOpt = Array.from(gbpsSel.options).find((o) => Math.abs(parseFloat(o.value) - Number(prof.target_gbps)) < 0.01);
-      if (matchOpt) gbpsSel.value = matchOpt.value;
+    const payload = { ...p.payload };
+    if (p.usesUserBox) {
+      const users = this.readUsers('homeUsers', payload.simulated_users);
+      payload.simulated_users = users;
+      payload.simulated_devices = users * 2;
+      payload.name = `${users.toLocaleString()} users — gateway load test`;
+      delete payload.scenario_id;
+      // Larger populations get a longer ramp so the gateway isn't hit with every new session at once
+      payload.ramp_up_sec = users > 50000 ? 120 : users > 20000 ? 60 : 20;
     }
-    this.updateDashEngineHint();
-  },
-
-  updateDashEngineHint() {
-    const hint = document.getElementById('qtDashEngineHint');
-    const eng = document.getElementById('qtDashEngine')?.value;
-    if (!hint) return;
-    const topo = (this.latest && this.latest.topology_assessment) || {};
-    const cabled = topo.active_mode_code === 'physical_lan_wan';
-    if (eng === 'internet_wan' || eng === 'hybrid') {
-      hint.innerHTML = `<span style="color:#15803D;font-weight:600;">&#9679; Routes real WAN traffic out enp216s0 &rarr; 10.20.30.1 &rarr; Internet</span> (capped at 85% of active management link speed to protect UI).`;
-    } else if (!cabled) {
-      hint.innerHTML = `<span style="color:#D97706;font-weight:600;">&#9888; eno1–eno4 unplugged:</span> Runs on internal R640 loopback (<code>veth_trex0</code>). Choose <strong>Live Internet / WAN</strong> above to send traffic through <code>10.20.30.1</code> WAN, or cable <code>eno1</code>/<code>eno2</code>.`;
-    } else {
-      hint.innerHTML = `<span style="color:#15803D;font-weight:600;">&#9679; Physical LAN &harr; EFG &harr; WAN ports active.</span>`;
-    }
+    try {
+      await this.startTestRequest(payload);
+      this.navigate('live-monitoring');
+    } catch (_) {}
   },
 
   connectWebSocket() {
@@ -280,7 +380,7 @@ const App = {
     this.ws = ws;
 
     ws.onopen = () => {
-      if (sbWs) sbWs.innerHTML = `<span style="color:#4ADE80;">&#9679;</span> Live 250ms Stream`;
+      if (sbWs) sbWs.innerHTML = `<span style="color:#4ADE80;">&#9679;</span> Live`;
     };
     ws.onmessage = (ev) => {
       try {
@@ -349,13 +449,10 @@ const App = {
       sub.textContent = f.trex_connected ? `Running • ${modeTxt} DPDK` : 'Offline';
     }
 
-    const hwSub = document.getElementById('hdrHwSub');
-    if (hwSub && f.ram_total_gb) {
-      hwSub.textContent = `2 × Xeon | ${Math.round(f.ram_total_gb)} GB RAM`;
-    }
-
     const stopBtn = document.getElementById('hdrEmergencyStop');
     if (stopBtn) stopBtn.style.display = f.running ? 'inline-flex' : 'none';
+    const liveDot = document.getElementById('navLiveDot');
+    if (liveDot) liveDot.classList.toggle('on', !!f.running);
 
     const alerts = f.alerts || [];
     const alertBadge = document.getElementById('hdrAlertCount');
@@ -371,7 +468,6 @@ const App = {
 
   initDashboardCharts() {
     const tpEl = document.getElementById('dashThroughputChart');
-    const mixEl = document.getElementById('dashMixChart');
     if (tpEl && window.echarts) {
       this.charts.dashTp = echarts.init(tpEl);
       this.charts.dashTp.setOption({
@@ -383,155 +479,129 @@ const App = {
         yAxis: { type: 'value', name: 'Gbps', min: 0, nameTextStyle: { color: '#64748B', fontSize: 11 }, axisLabel: { color: '#64748B', fontSize: 11 }, splitLine: { lineStyle: { color: '#EEF2F6' } } },
         series: [
           { name: 'TX (Gbps)', type: 'line', smooth: true, showSymbol: false, lineStyle: { width: 2.3, color: '#1769D2' }, itemStyle: { color: '#1769D2' }, areaStyle: { color: 'rgba(23,105,210,0.12)' }, data: [] },
-          { name: 'RX (Gbps)', type: 'line', smooth: true, showSymbol: false, lineStyle: { width: 2.0, color: '#2585E6' }, itemStyle: { color: '#2585E6' }, areaStyle: { color: 'rgba(37,133,230,0.06)' }, data: [] },
+          { name: 'RX (Gbps)', type: 'line', smooth: true, showSymbol: false, lineStyle: { width: 2.0, color: '#10B981' }, itemStyle: { color: '#10B981' }, areaStyle: { color: 'rgba(16,185,129,0.06)' }, data: [] },
         ],
       });
     }
+  },
 
-    if (mixEl && window.echarts) {
-      this.charts.dashMix = echarts.init(mixEl);
-    }
+  fmtLatency(us) {
+    const v = Number(us || 0);
+    if (!v) return { val: '—', unit: '' };
+    if (v >= 1000) return { val: (v / 1000).toFixed(2), unit: 'ms' };
+    return { val: v.toFixed(1), unit: 'μs' };
   },
 
   updateDashboardView(f) {
-    const tgtBps = Math.max(1, Number(f.target_bps || 5e9));
-    const txParts = this.fmtBpsParts(f.tx_bps || 0);
-    const rxParts = this.fmtBpsParts(f.rx_bps || 0);
-    const ppsParts = this.fmtPpsParts(f.tx_pps || 0);
-    const tgtStr = this.fmtBps(tgtBps);
-    const txPct = Math.min(100, ((f.tx_bps || 0) / tgtBps) * 100);
-    const rxPct = Math.min(100, ((f.rx_bps || 0) / tgtBps) * 100);
+    // --- Status hero ---
+    const hero = document.getElementById('homeHero');
+    const heroTitle = document.getElementById('homeHeroTitle');
+    const heroSub = document.getElementById('homeHeroSub');
+    const heroAct = document.getElementById('homeHeroActions');
+    const runningKey = f.running ? `run-${f.run_id || f.test_name}` : (f.trex_connected ? 'idle-ok' : 'idle-off');
+    if (f.running) {
+      hero.className = 'hero-card running';
+      heroTitle.textContent = `Running: ${f.test_name || 'test'}`;
+      const remaining = f.duration_sec ? ` of ${this.fmtDurationClock(f.duration_sec)}` : '';
+      heroSub.textContent = `${(f.phase_name || 'steady').replace(/_/g, ' ')} • ${this.fmtDurationClock(f.elapsed_sec)}${remaining} • ${Number(f.simulated_users || 0).toLocaleString()} users`;
+    } else if (f.trex_connected) {
+      hero.className = 'hero-card idle';
+      heroTitle.textContent = 'Ready to test';
+      heroSub.innerHTML = 'Pick a one-click test below, or build your own under <strong>Run a Test</strong>.';
+    } else {
+      hero.className = 'hero-card warn';
+      heroTitle.textContent = 'TRex engine is offline';
+      heroSub.innerHTML = 'Lab tests need the TRex engine. The <strong>Internet speed</strong> test still works. Open <strong>System &amp; Settings &rarr; TRex Engine</strong> to fix.';
+    }
+    if (this._heroKey !== runningKey) {
+      this._heroKey = runningKey;
+      heroAct.innerHTML = f.running
+        ? `<button class="btn btn-outline" onclick="App.navigate('live-monitoring')">Open Live View</button>
+           <button class="btn btn-danger" onclick="App.stopActiveTest('completed')">&#9632; Stop</button>`
+        : (f.trex_connected
+          ? `<button class="btn btn-primary" onclick="App.runPreset('efg10k')">&#9654; Run load test</button>`
+          : `<button class="btn btn-outline" onclick="App.navigate('trex-engine')">Check TRex engine</button>`);
+    }
 
+    // --- KPIs ---
+    const tgtBps = Number(f.target_bps || 0);
+    const txParts = this.fmtBpsParts(f.tx_bps || 0);
+    const txPct = tgtBps > 0 ? Math.min(100, ((f.tx_bps || 0) / tgtBps) * 100) : 0;
     document.getElementById('kpiTxVal').textContent = txParts.val;
     document.getElementById('kpiTxUnit').textContent = txParts.unit;
     document.getElementById('kpiTxBar').style.width = `${txPct.toFixed(1)}%`;
-    document.getElementById('kpiTxFoot').textContent = `Target: ${tgtStr} (${txPct.toFixed(1)}%)`;
+    document.getElementById('kpiTxFoot').textContent = f.running
+      ? `Received ${this.fmtBps(f.rx_bps || 0)} • target ${tgtBps ? this.fmtBps(tgtBps) : '—'}`
+      : 'No test running';
 
-    document.getElementById('kpiRxVal').textContent = rxParts.val;
-    document.getElementById('kpiRxUnit').textContent = rxParts.unit;
-    document.getElementById('kpiRxBar').style.width = `${rxPct.toFixed(1)}%`;
-    document.getElementById('kpiRxFoot').textContent = `Target: ${tgtStr} (${rxPct.toFixed(1)}%)`;
+    const lat = this.fmtLatency(f.lat_avg_us);
+    document.getElementById('kpiLatVal').textContent = lat.val;
+    document.getElementById('kpiLatUnit').textContent = lat.unit;
+    const jit = this.fmtLatency(f.jitter_us);
+    document.getElementById('kpiLatFoot').textContent = f.lat_avg_us
+      ? `Jitter ${jit.val} ${jit.unit}${f.mos_score ? ` • call quality (MOS) ${Number(f.mos_score).toFixed(2)}` : ''}`
+      : 'Measured during a test';
 
-    document.getElementById('kpiPpsVal').textContent = ppsParts.val;
-    document.getElementById('kpiPpsUnit').textContent = ppsParts.unit;
-    document.getElementById('kpiFlowsFoot').textContent = `Flows: ${Number(f.active_flows || 0).toLocaleString()} | TCP Est: ${Number(f.established_sessions || 0).toLocaleString()}`;
+    const loss = Number(f.drop_pct || 0);
+    document.getElementById('kpiLossVal').textContent = loss.toFixed(3);
+    document.getElementById('kpiLossFoot').textContent = `${Number(f.dropped_packets || 0).toLocaleString()} packets dropped`;
 
-    document.getElementById('kpiLatVal').textContent = Number(f.lat_avg_us || 0).toFixed(2);
-    document.getElementById('kpiLatFoot').textContent = `P95: ${Number(f.p95_lat_us || 0).toFixed(1)} μs | P99: ${Number(f.p99_lat_us || 0).toFixed(1)} μs`;
+    document.getElementById('kpiUsersVal').textContent = f.running ? Number(f.simulated_users || 0).toLocaleString() : '0';
+    document.getElementById('kpiFlowsFoot').textContent = f.running
+      ? `${Number(f.active_flows || 0).toLocaleString()} active flows • ${Number(f.cps || 0).toFixed(0)} new/s`
+      : 'Simulated users during a test';
 
-    document.getElementById('kpiJitVal').textContent = Number(f.jitter_us || 0).toFixed(2);
-    document.getElementById('kpiJitFoot').textContent = `CPS: ${Number(f.cps || 0).toFixed(0)}/s | MOS: ${f.mos_score ? f.mos_score.toFixed(2) : '—'}`;
-
-    document.getElementById('kpiLossVal').textContent = Number(f.drop_pct || 0).toFixed(4);
-    document.getElementById('kpiLossFoot').textContent = `Dropped: ${Number(f.dropped_packets || 0).toLocaleString()} pkts`;
-
-    // Active Test Status Card
-    const runCard = document.getElementById('kpiRunCard');
-    const runDot = document.getElementById('kpiRunBadgeDot');
-    const runTitle = document.getElementById('kpiRunStatusTitle');
-    const runSub = document.getElementById('kpiRunSubInfo');
-    const runAct = document.getElementById('kpiRunActionArea');
-    if (f.running) {
-      runCard.className = 'kpi-card active-run-card running';
-      runDot.style.background = '#15803D';
-      runTitle.textContent = `Test Running (${(f.phase_name || 'steady').replace('_', ' ')})`;
-      runSub.innerHTML = `<strong>${f.simulated_users.toLocaleString()} Users</strong> &bull; ${this.fmtDurationClock(f.elapsed_sec)}`;
-      runAct.innerHTML = `<button class="btn btn-primary btn-sm btn-block" onclick="App.stopActiveTest('completed')">&#9632; Stop Test</button>`;
-    } else {
-      runCard.className = 'kpi-card active-run-card idle';
-      runDot.style.background = '#64748B';
-      runTitle.textContent = 'Idle — Ready';
-      runSub.textContent = `${Number(f.simulated_users || 10000).toLocaleString()} Emulated Users Configured`;
-      runAct.innerHTML = `<button class="btn btn-primary btn-sm btn-block" onclick="App.quickStart10K()">&#9654; Run 10K EFG Test</button>`;
-    }
-
-    // Update Throughput Chart (auto-scale Mbps vs Gbps)
+    // --- Throughput chart (auto-scale Mbps vs Gbps) ---
     if (this.charts.dashTp) {
-      const maxG = Math.max(...this.history.txGbps, 0.001);
-      const useMbps = maxG < 0.8 && (f.running && f.tx_bps > 0);
+      const maxG = Math.max(...this.history.txGbps, ...this.history.rxGbps, 0);
+      const useMbps = maxG < 0.8;
       const unit = useMbps ? 'Mbps' : 'Gbps';
       const factor = useMbps ? 1000 : 1;
       this.charts.dashTp.setOption({
         xAxis: { data: this.history.labels },
         yAxis: { name: unit },
         series: [
-          { name: `TX (${unit})`, data: this.history.txGbps.map((v) => Number((v * factor).toFixed(3))) },
-          { name: `RX (${unit})`, data: this.history.rxGbps.map((v) => Number((v * factor).toFixed(3))) },
+          { name: `Sent (${unit})`, data: this.history.txGbps.map((v) => Number((v * factor).toFixed(3))) },
+          { name: `Received (${unit})`, data: this.history.rxGbps.map((v) => Number((v * factor).toFixed(3))) },
         ],
       });
     }
-    document.getElementById('dashChartEngineLabel').textContent = `Engine: ${f.traffic_engine || 'trex_astf'} (${f.trex_daemon_mode || 'ASTF'})`;
+    const engineNames = { trex_astf: 'TRex stateful', trex_stl: 'TRex stateless', internet_wan: 'Internet / WAN', hybrid: 'Hybrid' };
+    document.getElementById('dashChartEngineLabel').textContent = f.running ? (engineNames[f.traffic_engine] || f.traffic_engine || '') : '';
 
-    // Update Traffic Mix Donut
-    if (this.charts.dashMix) {
-      const mix = f.protocol_mix || {};
-      const entries = Object.entries(mix).filter(([, v]) => Number(v) > 0).sort((a, b) => b[1] - a[1]);
-      const top = entries.slice(0, 5);
-      if (entries.length > 5) {
-        const rest = entries.slice(5).reduce((acc, [, v]) => acc + Number(v), 0);
-        if (rest > 0) top.push(['other', Number(rest.toFixed(1))]);
-      }
-      const pieData = top.map(([k, v]) => {
-        const meta = WORKLOAD_COLORS[k] || { label: 'Other (VoIP, DNS, etc.)', color: '#94A3B8' };
-        return { name: `${meta.label}  ${Number(v).toFixed(0)}%`, value: Number(v), itemStyle: { color: meta.color } };
-      });
-      const centerVal = f.running ? `${txParts.val} ${txParts.unit}` : '100% Mix';
-      this.charts.dashMix.setOption({
-        animation: false,
-        tooltip: { trigger: 'item', formatter: '{b}' },
-        legend: { orient: 'vertical', right: 0, top: 'middle', icon: 'circle', itemWidth: 9, itemHeight: 9, textStyle: { color: '#17243A', fontSize: 11.5 } },
-        title: {
-          text: centerVal,
-          subtext: f.running ? 'Live Total' : `${Number(f.simulated_users || 10000).toLocaleString()} Users`,
-          left: '25%',
-          top: '39%',
-          textAlign: 'center',
-          textStyle: { fontSize: 14.5, fontWeight: 800, color: '#17243A' },
-          subtextStyle: { fontSize: 11, color: '#64748B' },
-        },
-        series: [{
-          type: 'pie',
-          radius: ['52%', '76%'],
-          center: ['26%', '50%'],
-          avoidLabelOverlap: false,
-          label: { show: false },
-          itemStyle: { borderColor: '#FFFFFF', borderWidth: 2 },
-          data: pieData,
-        }],
-      });
-    }
-
-    // Update UniFi Stack Card
+    // --- UniFi card ---
     this.renderDashUniFiStack(f);
 
-    // Update NICs Table
-    this.renderDashNicTable(f.interfaces || []);
-
-    // Update System Health Strip
+    // --- Server health card ---
+    const setBar = (id, pct) => { const el = document.getElementById(id); if (el) el.style.width = `${Math.min(100, Math.max(0, pct))}%`; };
     const cpu = Number(f.cpu_pct || 0);
     const ram = Number(f.ram_pct || 0);
-    const disk = (f.storage && f.storage.percent) || 6;
     document.getElementById('hlthCpuTxt').textContent = `${cpu.toFixed(0)}%`;
-    document.getElementById('hlthCpuBar').style.width = `${Math.min(100, cpu)}%`;
-    document.getElementById('hlthRamTxt').textContent = `${ram.toFixed(0)}% (${f.ram_used_gb || 0} / ${Math.round(f.ram_total_gb || 500)} GB)`;
-    document.getElementById('hlthRamBar').style.width = `${Math.min(100, ram)}%`;
-    if (f.storage) {
-      document.getElementById('hlthDiskTxt').textContent = `${disk.toFixed(0)}% (${f.storage.used_gb} / ${f.storage.total_gb} GB)`;
-      document.getElementById('hlthDiskBar').style.width = `${Math.min(100, disk)}%`;
+    setBar('hlthCpuBar', cpu);
+    document.getElementById('hlthRamTxt').textContent = f.ram_total_gb ? `${ram.toFixed(0)}% of ${Math.round(f.ram_total_gb)} GB` : `${ram.toFixed(0)}%`;
+    setBar('hlthRamBar', ram);
+    if (f.storage && f.storage.total_gb) {
+      document.getElementById('hlthDiskTxt').textContent = `${Number(f.storage.percent || 0).toFixed(0)}% of ${Math.round(f.storage.total_gb)} GB`;
+      setBar('hlthDiskBar', Number(f.storage.percent || 0));
     }
 
     const alerts = f.alerts || [];
+    const hb = document.getElementById('hlthBadge');
     const sumDot = document.getElementById('hlthSummaryDot');
     const sumTitle = document.getElementById('hlthSummaryTitle');
     const sumSub = document.getElementById('hlthSummarySub');
     if (alerts.length > 0) {
       sumDot.className = 'status-chip-dot warn';
-      sumTitle.textContent = `${alerts.length} Hardware / Link Notice`;
-      sumSub.textContent = alerts[0].message.slice(0, 72) + '...';
+      sumTitle.textContent = `${alerts.length} notice${alerts.length > 1 ? 's' : ''} — click to view`;
+      sumSub.textContent = String(alerts[0].message || '').slice(0, 80);
+      hb.className = 'badge badge-warning';
+      hb.textContent = 'Check';
     } else {
       sumDot.className = 'status-chip-dot';
-      sumTitle.textContent = 'All Systems Operational';
-      sumSub.textContent = 'TRex Engine, NICs & Monitoring running normally.';
+      sumTitle.textContent = 'All good';
+      sumSub.textContent = f.trex_connected ? 'TRex engine connected.' : 'No alerts.';
+      hb.className = 'badge badge-success';
+      hb.textContent = 'OK';
     }
   },
 
@@ -541,98 +611,64 @@ const App = {
     if (!badge || !body) return;
 
     const u = f.unifi_summary || {};
+    const has = (v) => v !== null && v !== undefined;
     if (f.unifi_connected) {
       badge.className = 'badge badge-success';
-      badge.textContent = '● Connected';
-      const gwCpu = u.gw_cpu_pct !== null && u.gw_cpu_pct !== undefined ? `${Number(u.gw_cpu_pct).toFixed(0)}%` : 'Unavailable';
-      const gwMem = u.gw_mem_pct !== null && u.gw_mem_pct !== undefined ? `${Number(u.gw_mem_pct).toFixed(0)}%` : 'Unavailable';
-      const wanRate = u.wan_rx_bps !== null && u.wan_rx_bps !== undefined ? this.fmtBps((u.wan_rx_bps || 0) + (u.wan_tx_bps || 0)) : 'Unavailable';
+      badge.textContent = 'Connected';
+      const gwCpu = has(u.gw_cpu_pct) ? `${Number(u.gw_cpu_pct).toFixed(0)}%` : '—';
+      const gwMem = has(u.gw_mem_pct) ? `${Number(u.gw_mem_pct).toFixed(0)}%` : '—';
       body.innerHTML = `
         <div class="unifi-stack-row" onclick="App.navigate('unifi-monitoring')">
           <div>
-            <div style="font-weight:700;font-size:13px;"><span style="color:#15803D;">&#9679;</span> ${u.gw_name || 'Enterprise Fortress Gateway (EFG)'}</div>
-            <div style="font-size:11.5px;color:var(--text-secondary);margin-top:2px;">CPU <strong>${gwCpu}</strong> | RAM <strong>${gwMem}</strong> | WAN <strong>${wanRate}</strong></div>
+            <div style="font-weight:700;font-size:13px;">${this.esc(u.gw_name || 'Gateway')}</div>
+            <div style="font-size:11.5px;color:var(--text-secondary);margin-top:2px;">CPU <strong>${gwCpu}</strong> • RAM <strong>${gwMem}</strong></div>
           </div>
           <span style="color:var(--text-secondary);">&rsaquo;</span>
         </div>
         <div class="unifi-stack-row" onclick="App.navigate('unifi-monitoring')">
           <div style="font-weight:600;">Switches</div>
-          <div><strong style="color:#15803D;">${u.switches_online ?? 0} / ${u.switches_total ?? 0}</strong> Online &rsaquo;</div>
+          <div><strong>${u.switches_online ?? 0} / ${u.switches_total ?? 0}</strong> online</div>
         </div>
         <div class="unifi-stack-row" onclick="App.navigate('unifi-monitoring')">
-          <div style="font-weight:600;">Access Points</div>
-          <div><strong style="color:#15803D;">${u.aps_online ?? 0} / ${u.aps_total ?? 0}</strong> Online &rsaquo;</div>
+          <div style="font-weight:600;">Access points</div>
+          <div><strong>${u.aps_online ?? 0} / ${u.aps_total ?? 0}</strong> online</div>
         </div>
         <div class="unifi-stack-row" style="margin-bottom:0;" onclick="App.navigate('unifi-monitoring')">
-          <div style="font-weight:600;">Clients (Active)</div>
-          <div><strong>${u.active_clients !== null && u.active_clients !== undefined ? Number(u.active_clients).toLocaleString() : 'Unavailable'}</strong> &rsaquo;</div>
+          <div style="font-weight:600;">Clients</div>
+          <div><strong>${has(u.active_clients) ? Number(u.active_clients).toLocaleString() : '—'}</strong></div>
         </div>
       `;
     } else {
       badge.className = 'badge badge-neutral';
-      badge.textContent = f.unifi_status || 'Not Configured';
+      badge.textContent = f.unifi_status && f.unifi_status !== 'not_configured' ? String(f.unifi_status) : 'Not set up';
       body.innerHTML = `
-        <div class="unifi-stack-row" onclick="App.navigate('network-topology')">
-          <div>
-            <div style="font-weight:700;font-size:13px;"><span style="color:#15803D;">&#9679;</span> Gateway Reachable (10.20.30.1)</div>
-            <div style="font-size:11.5px;color:var(--text-secondary);">Ubiquiti OUI detected on LAN &bull; Connect API Key for EFG CPU/RAM</div>
-          </div>
-          <span style="color:var(--text-secondary);">&rsaquo;</span>
+        <div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:10px;">
+          Connect your UniFi controller to see gateway CPU, switches, access points and clients next to your test results.
         </div>
-        <div style="padding:10px 12px;background:#F8FAFC;border:1px dashed var(--border-color);border-radius:8px;margin-top:8px;">
-          <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;">
-            Connect a read-only Local UniFi Network API key (<code>X-API-KEY</code>) to stream live EFG CPU, memory, switch port utilisation, APs, and active client telemetry.
-          </div>
-          <button class="btn btn-outline btn-sm btn-block" onclick="App.navigate('api-integrations')">Configure UniFi API &amp; SNMP &rarr;</button>
-        </div>
+        <button class="btn btn-outline btn-sm btn-block" onclick="App.navigate('api-integrations')">Connect UniFi &rarr;</button>
       `;
     }
-  },
-
-  renderDashNicTable(ifaces) {
-    const tbody = document.getElementById('dashNicTableBody');
-    const badge = document.getElementById('dashNicCountBadge');
-    if (!tbody) return;
-    const upCount = ifaces.filter((i) => i.operstate === 'up').length;
-    if (badge) badge.textContent = `${upCount} / ${ifaces.length} Up`;
-
-    tbody.innerHTML = ifaces.slice(0, 6).map((nic, idx) => {
-      const isUp = nic.operstate === 'up';
-      const spd = nic.speed_mbps ? (nic.speed_mbps >= 1000 ? `${nic.speed_mbps / 1000} Gbps` : `${nic.speed_mbps} Mbps`) : 'Unplugged';
-      return `
-        <tr>
-          <td><span class="port-pill ${isUp ? '' : 'down'}">P${idx + 1}</span></td>
-          <td><strong>${nic.ifname}</strong> ${nic.is_management ? '<span class="badge badge-info" style="font-size:10px;padding:1px 5px;">MGMT</span>' : ''}</td>
-          <td>${spd}</td>
-          <td>${isUp ? '<span style="color:#15803D;font-weight:600;">&#9679; Up</span>' : '<span style="color:#64748B;">&#9679; Down</span>'}</td>
-          <td>${this.fmtBps(nic.live_tx_bps || 0)}</td>
-          <td>${this.fmtBps(nic.live_rx_bps || 0)}</td>
-        </tr>
-      `;
-    }).join('');
   },
 
   renderDashRecentRuns() {
     const tbody = document.getElementById('dashRecentRunsBody');
     if (!tbody) return;
     if (!this.runs || this.runs.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--text-secondary);padding:18px;">No recorded test runs yet.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text-secondary);padding:18px;">No tests yet — try a one-click test.</td></tr>`;
       return;
     }
     tbody.innerHTML = this.runs.slice(0, 5).map((r) => {
       const s = r.summary || {};
       const avgRx = this.fmtBps(s.avg_rx_bps || s.max_rx_bps || 0);
-      const lat = s.lat_avg_us ? `${Number(s.lat_avg_us).toFixed(1)} μs` : '—';
-      const loss = s.drop_pct !== undefined ? `${Number(s.drop_pct).toFixed(4)}%` : '0.0000%';
+      const loss = s.drop_pct !== undefined && s.drop_pct !== null ? `${Number(s.drop_pct).toFixed(3)}%` : '—';
+      const name = String(r.name || `Run #${r.id}`);
       return `
         <tr>
-          <td><a href="javascript:void(0)" style="color:var(--primary);font-weight:600;text-decoration:none;" onclick="StudioPages.showRunDetailModal(${r.id})">${r.name.slice(0, 30)}</a></td>
-          <td>${Number(r.simulated_users || 0).toLocaleString()}</td>
-          <td style="color:var(--primary);font-weight:600;">${avgRx}</td>
-          <td>${lat}</td>
+          <td><a href="javascript:void(0)" style="color:var(--primary);font-weight:600;text-decoration:none;" title="${this.esc(name)}" onclick="StudioPages.showRunDetailModal(${Number(r.id)})">${this.esc(name.length > 34 ? name.slice(0, 33) + '…' : name)}</a></td>
+          <td style="font-weight:600;">${avgRx}</td>
           <td>${loss}</td>
           <td>${this.verdictBadge(s.verdict || r.verdict, s.thresholds_configured)}</td>
-          <td><a class="btn btn-outline btn-sm" href="/api/runs/${r.id}/export/pdf?report_type=technical" target="_blank">PDF</a></td>
+          <td><a class="btn btn-outline btn-sm" href="/api/runs/${Number(r.id)}/export/pdf?report_type=executive&inline=1" target="_blank">PDF</a></td>
         </tr>
       `;
     }).join('');
@@ -664,11 +700,13 @@ const App = {
     const h = this.history;
 
     document.getElementById('lmHeaderTitle').textContent = f.running
-      ? `Live Test: ${f.test_name} (${(f.phase_name || 'steady').toUpperCase()})`
-      : 'Live Monitoring — Ready';
+      ? `${f.test_name || 'Test'} — ${(f.phase_name || 'steady').replace(/_/g, ' ')}`
+      : 'No test running';
     document.getElementById('lmHeaderSub').textContent = f.running
-      ? `Engine: ${f.traffic_engine} | Simulated Users: ${Number(f.simulated_users || 0).toLocaleString()} | Client IPs: ${Number(f.emulated_client_ips || 0).toLocaleString()} | Elapsed: ${this.fmtDurationClock(f.elapsed_sec)}`
-      : `Telemetry Source: ${f.telemetry_source || 'Cisco TRex Ready'}`;
+      ? `${this.fmtDurationClock(f.elapsed_sec)} elapsed • ${Number(f.simulated_users || 0).toLocaleString()} users • ${Number(f.emulated_client_ips || 0).toLocaleString()} client IPs • source: ${f.telemetry_source || f.traffic_engine || '—'}`
+      : 'Start a test from Home or Run a Test. The last results stay on the chart below.';
+    const ctrls = document.getElementById('lmControls');
+    if (ctrls) ctrls.style.display = f.running ? 'flex' : 'none';
 
     const ch = this.charts.liveMon;
     const titleEl = document.getElementById('lmChartTitle');
@@ -784,7 +822,10 @@ const App = {
   async startTestRequest(payload) {
     try {
       const res = await this.api('/api/test/start', { method: 'POST', body: JSON.stringify(payload) });
-      this.toast(`Started Run #${res.run_id}: ${res.name}`, 'success');
+      if (!res || !res.run_id) {
+        throw new Error((res && (res.error || res.detail || res.message)) || 'the server did not start a run');
+      }
+      this.toast(`Started test #${res.run_id}: ${res.name || payload.name || ''}`, 'success');
       return res;
     } catch (e) {
       this.toast(`Failed to start test: ${e.message}`, 'error');
@@ -793,40 +834,7 @@ const App = {
   },
 
   async quickStart10K() {
-    await this.startTestRequest({
-      scenario_id: 'scenario_10000_users',
-      name: '10,000 Users — Primary EFG Acceptance Test',
-      profile_id: 'imix',
-      traffic_engine: 'trex_astf',
-      test_mode: 'phased',
-      simulated_users: 10000,
-      simulated_devices: 20000,
-      target_gbps: 5.0,
-      ramp_up_sec: 20,
-      steady_sec: 90,
-      ramp_down_sec: 10,
-    });
-  },
-
-  async startFromDashboardQuickTest() {
-    const profile_id = document.getElementById('qtDashProfile').value;
-    const simulated_users = parseInt(document.getElementById('qtDashUsers').value, 10) || 10000;
-    const target_gbps = parseFloat(document.getElementById('qtDashTargetGbps').value) || 5.0;
-    const duration_sec = parseInt(document.getElementById('qtDashDuration').value, 10) || 60;
-    const traffic_engine = document.getElementById('qtDashEngine').value;
-
-    await this.startTestRequest({
-      profile_id,
-      simulated_users,
-      simulated_devices: simulated_users * 2,
-      target_gbps,
-      duration_sec,
-      traffic_engine,
-      test_mode: traffic_engine === 'trex_astf' ? 'phased' : 'timed',
-      ramp_up_sec: traffic_engine === 'trex_astf' ? Math.min(15, Math.floor(duration_sec / 4)) : 0,
-      steady_sec: traffic_engine === 'trex_astf' ? Math.max(10, duration_sec - 20) : duration_sec,
-      ramp_down_sec: traffic_engine === 'trex_astf' ? 5 : 0,
-    });
+    return this.runPreset('efg10k');
   },
 
   async stopActiveTest(reason = 'completed') {

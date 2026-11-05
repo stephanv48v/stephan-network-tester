@@ -17,10 +17,14 @@ Key Engineering Properties:
 import ipaddress
 from typing import Any, Dict, List, Tuple
 
+# Upper limit for simulated users (one emulated client IP per user).
+# 100,000 users from 16.0.0.1 ends at 16.1.134.160 — well clear of the 48.x server pool.
+MAX_SIMULATED_USERS = 100_000
+
 
 def compute_client_ip_range(base_ip: str, user_count: int) -> Tuple[str, str, int]:
     """Compute sequential IPv4 range [start_ip, end_ip] for exact simulated user population."""
-    count = max(1, min(65000, int(user_count)))
+    count = max(1, min(MAX_SIMULATED_USERS, int(user_count)))
     try:
         start_int = int(ipaddress.IPv4Address(base_ip))
     except Exception:
@@ -106,6 +110,9 @@ def build_astf_enterprise_profile(
         templates.append(ASTFTemplate(client_template=uc, server_template=us))
         template_summary.append({"key": key, "proto": "UDP", "port": port, "weight_pct": weight_pct, "target_cps": round(cps, 2)})
 
+    # NOTE: ASTF recv()/recv_msg() wait on a CUMULATIVE rx watermark; clear=True resets it after each step so
+    # multi-step request/response programs wait for every response instead of falling through early.
+
     # 1. Web Browsing & HTTPS-like Keepalive Sessions (Port 443)
     w_web = float(normalized_mix.get("web_browsing", 0.0))
     if w_web > 0:
@@ -114,8 +121,8 @@ def build_astf_enterprise_profile(
         resp1 = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n" + (b"W" * 24000)
         req2 = b"GET /static/app.bundle.js HTTP/1.1\r\nHost: www.enterprise.test\r\n\r\n"
         resp2 = b"HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\n\r\n" + (b"J" * 44000)
-        pc.send(req1); pc.recv(len(resp1)); pc.delay(120000); pc.send(req2); pc.recv(len(resp2))
-        ps.recv(len(req1)); ps.send(resp1); ps.recv(len(req2)); ps.send(resp2)
+        pc.send(req1); pc.recv(len(resp1), clear=True); pc.delay(120000); pc.send(req2); pc.recv(len(resp2), clear=True)
+        ps.recv(len(req1), clear=True); ps.send(resp1); ps.recv(len(req2), clear=True); ps.send(resp2)
         add_tcp_template("web_browsing", 443, pc, ps, w_web)
 
     # 2. Social Media Browsing & Media Bursts (Port 8443)
@@ -126,8 +133,8 @@ def build_astf_enterprise_profile(
         resp1 = b"HTTP/1.1 200 OK\r\n\r\n" + (b"M" * 96000)
         req2 = b"POST /feed/engagement HTTP/1.1\r\nContent-Length: 900\r\n\r\n" + (b"E" * 900)
         resp2 = b"HTTP/1.1 200 OK\r\n\r\n" + (b"V" * 128000)
-        pc.send(req1); pc.recv(len(resp1)); pc.delay(220000); pc.send(req2); pc.recv(len(resp2))
-        ps.recv(len(req1)); ps.send(resp1); ps.recv(len(req2)); ps.send(resp2)
+        pc.send(req1); pc.recv(len(resp1), clear=True); pc.delay(220000); pc.send(req2); pc.recv(len(resp2), clear=True)
+        ps.recv(len(req1), clear=True); ps.send(resp1); ps.recv(len(req2), clear=True); ps.send(resp2)
         add_tcp_template("social_browsing", 8443, pc, ps, w_soc)
 
     # 3. Video Streaming & Sustained ABR Chunk Downloads (Port 8080)
@@ -137,10 +144,10 @@ def build_astf_enterprise_profile(
         seg_req = b"GET /video/1080p/segment_init.m4s HTTP/1.1\r\nHost: stream.cdn.test\r\n\r\n"
         seg_rsp = b"HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\n\r\n" + (b"S" * 262144)
         for idx in range(4):
-            pc.send(seg_req); pc.recv(len(seg_rsp))
+            pc.send(seg_req); pc.recv(len(seg_rsp), clear=True)
             if idx < 3:
                 pc.delay(250000)
-            ps.recv(len(seg_req)); ps.send(seg_rsp)
+            ps.recv(len(seg_req), clear=True); ps.send(seg_rsp)
         add_tcp_template("video_streaming", 8080, pc, ps, w_vid)
 
     # 4. Microsoft 365-style Application Activity (Port 9443)
@@ -151,8 +158,8 @@ def build_astf_enterprise_profile(
         dn1 = b"HTTP/1.1 200 OK\r\n\r\n" + (b"A" * 14000)
         up2 = b"POST /mail/sync HTTP/1.1\r\nContent-Length: 6144\r\n\r\n" + (b"O" * 6144)
         dn2 = b"HTTP/1.1 200 OK\r\n\r\n" + (b"I" * 8192)
-        pc.send(up1); pc.recv(len(dn1)); pc.delay(180000); pc.send(up2); pc.recv(len(dn2))
-        ps.recv(len(up1)); ps.send(dn1); ps.recv(len(up2)); ps.send(dn2)
+        pc.send(up1); pc.recv(len(dn1), clear=True); pc.delay(180000); pc.send(up2); pc.recv(len(dn2), clear=True)
+        ps.recv(len(up1), clear=True); ps.send(dn1); ps.recv(len(up2), clear=True); ps.send(dn2)
         add_tcp_template("m365_productivity", 9443, pc, ps, w_m365)
 
     # 5. Teams-style Voice/Video Bidirectional UDP (Port 3478)
@@ -160,8 +167,8 @@ def build_astf_enterprise_profile(
     if w_teams > 0:
         pc, ps = ASTFProgram(stream=False), ASTFProgram(stream=False)
         for _ in range(8):
-            pc.send_msg(b"A" * 180); pc.recv_msg(1); pc.delay(20000)
-            ps.recv_msg(1); ps.send_msg(b"V" * 960)
+            pc.send_msg(b"A" * 180); pc.recv_msg(1, clear=True); pc.delay(20000)
+            ps.recv_msg(1, clear=True); ps.send_msg(b"V" * 960)
         add_udp_template("teams_collab", 3478, pc, ps, w_teams)
 
     # 6. WhatsApp-style Messaging & Small Media (Port 5222)
@@ -172,8 +179,8 @@ def build_astf_enterprise_profile(
         r1 = b"CHAT_ACK_IN:" + (b"a" * 240)
         m2 = b"MEDIA_NOTE_UP:" + (b"u" * 8192)
         r2 = b"MEDIA_DELIVERED:" + (b"d" * 9600)
-        pc.send(m1); pc.recv(len(r1)); pc.delay(300000); pc.send(m2); pc.recv(len(r2))
-        ps.recv(len(m1)); ps.send(r1); ps.recv(len(m2)); ps.send(r2)
+        pc.send(m1); pc.recv(len(r1), clear=True); pc.delay(300000); pc.send(m2); pc.recv(len(r2), clear=True)
+        ps.recv(len(m1), clear=True); ps.send(r1); ps.recv(len(m2), clear=True); ps.send(r2)
         add_tcp_template("messaging_chat", 5222, pc, ps, w_msg)
 
     # 7. Cloud File Uploads & Downloads (Port 8082 Upload + Port 8081 Download)
@@ -182,8 +189,8 @@ def build_astf_enterprise_profile(
         pc, ps = ASTFProgram(), ASTFProgram()
         up_payload = b"PUT /drive/upload.bin HTTP/1.1\r\nContent-Length: 131072\r\n\r\n" + (b"U" * 131072)
         dn_payload = b"HTTP/1.1 200 OK\r\n\r\n" + (b"F" * 131072)
-        pc.send(up_payload); pc.recv(len(dn_payload))
-        ps.recv(len(up_payload)); ps.send(dn_payload)
+        pc.send(up_payload); pc.recv(len(dn_payload), clear=True)
+        ps.recv(len(up_payload), clear=True); ps.send(dn_payload)
         add_tcp_template("cloud_files", 8082, pc, ps, w_files)
 
     # 8. Sustained Bulk Downloads (Port 8081)
@@ -192,16 +199,16 @@ def build_astf_enterprise_profile(
         pc, ps = ASTFProgram(), ASTFProgram()
         req = b"GET /release/update-image.bin HTTP/1.1\r\nHost: dl.cdn.test\r\n\r\n"
         rsp = b"HTTP/1.1 200 OK\r\nContent-Length: 524288\r\n\r\n" + (b"B" * 524288)
-        pc.send(req); pc.recv(len(rsp))
-        ps.recv(len(req)); ps.send(rsp)
+        pc.send(req); pc.recv(len(rsp), clear=True)
+        ps.recv(len(req), clear=True); ps.send(rsp)
         add_tcp_template("bulk_downloads", 8081, pc, ps, w_bulk)
 
     # 9. DNS Query/Response Transactions (UDP Port 53)
     w_dns = float(normalized_mix.get("dns_queries", 0.0))
     if w_dns > 0:
         pc, ps = ASTFProgram(stream=False), ASTFProgram(stream=False)
-        pc.send_msg(b"Q" * 64); pc.recv_msg(1)
-        ps.recv_msg(1); ps.send_msg(b"R" * 164)
+        pc.send_msg(b"Q" * 64); pc.recv_msg(1, clear=True)
+        ps.recv_msg(1, clear=True); ps.send_msg(b"R" * 164)
         add_udp_template("dns_queries", 53, pc, ps, w_dns)
 
     # 10. VoIP SIP/RTP Bearer Burst (UDP Port 5060)
@@ -209,8 +216,8 @@ def build_astf_enterprise_profile(
     if w_voip > 0:
         pc, ps = ASTFProgram(stream=False), ASTFProgram(stream=False)
         for _ in range(10):
-            pc.send_msg(b"G" * 160); pc.recv_msg(1); pc.delay(20000)
-            ps.recv_msg(1); ps.send_msg(b"G" * 160)
+            pc.send_msg(b"G" * 160); pc.recv_msg(1, clear=True); pc.delay(20000)
+            ps.recv_msg(1, clear=True); ps.send_msg(b"G" * 160)
         add_udp_template("voip_sip", 5060, pc, ps, w_voip)
 
     # 11. Low-Latency Gaming UDP (UDP Port 27015)
@@ -218,8 +225,8 @@ def build_astf_enterprise_profile(
     if w_game > 0:
         pc, ps = ASTFProgram(stream=False), ASTFProgram(stream=False)
         for _ in range(10):
-            pc.send_msg(b"K" * 96); pc.recv_msg(1); pc.delay(16000)
-            ps.recv_msg(1); ps.send_msg(b"W" * 128)
+            pc.send_msg(b"K" * 96); pc.recv_msg(1, clear=True); pc.delay(16000)
+            ps.recv_msg(1, clear=True); ps.send_msg(b"W" * 128)
         add_udp_template("gaming_realtime", 27015, pc, ps, w_game)
 
     # 12. Background Synchronisation & Upstream Backups (TCP Port 873)
@@ -228,8 +235,8 @@ def build_astf_enterprise_profile(
         pc, ps = ASTFProgram(), ASTFProgram()
         blk = b"SYNC_BACKUP_BLOCK_HEADER:" + (b"Z" * 196608)
         ack = b"SYNC_BLOCK_COMMITTED_OK\r\n"
-        pc.send(blk); pc.recv(len(ack)); pc.delay(50000); pc.send(blk); pc.recv(len(ack))
-        ps.recv(len(blk)); ps.send(ack); ps.recv(len(blk)); ps.send(ack)
+        pc.send(blk); pc.recv(len(ack), clear=True); pc.delay(50000); pc.send(blk); pc.recv(len(ack), clear=True)
+        ps.recv(len(blk), clear=True); ps.send(ack); ps.recv(len(blk), clear=True); ps.send(ack)
         add_tcp_template("backups_storage", 873, pc, ps, w_bak)
 
     # Fallback if somehow empty

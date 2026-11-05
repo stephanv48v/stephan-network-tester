@@ -125,6 +125,11 @@ class InternetTrafficEngine:
         if not self.download_urls:
             self.download_urls = list(DEFAULT_DOWNLOAD_URLS)
         self.probe_host = probe_host or "1.1.1.1"
+        # probe_host goes to ping argv / interface into a /sys path: reject option-like or path-like values
+        if not re.match(r"^(?!-)[A-Za-z0-9.:\-]{1,253}$", str(self.probe_host)):
+            self.probe_host = "1.1.1.1"
+        if not re.match(r"^(?!-)[A-Za-z0-9_.:@\-]{1,15}$", str(self.interface)) or self.interface in (".", ".."):
+            self.interface = "enp216s0"
 
         now = time.time()
         init_c = _read_iface_counters(self.interface)
@@ -150,12 +155,15 @@ class InternetTrafficEngine:
         self._probes_sent = 0
         self._probes_lost = 0
 
-        self._stop_event.clear()
+        # Fresh event per run: old workers still blocked in HTTP I/O keep their (set) event and exit,
+        # instead of seeing a cleared shared event and running forever alongside the new run.
+        self._stop_event = threading.Event()
+        stop_ev = self._stop_event
         self.running = True
         self._threads = []
 
         # 1. Start Latency / Jitter / Loss Probe Worker
-        t_probe = threading.Thread(target=self._probe_worker, daemon=True)
+        t_probe = threading.Thread(target=self._probe_worker, kwargs={"stop_ev": stop_ev}, daemon=True)
         t_probe.start()
         self._threads.append(t_probe)
 
@@ -163,7 +171,7 @@ class InternetTrafficEngine:
         if self.enable_download:
             dl_workers = max(1, int(math.ceil(self.worker_count * 0.65)))
             for idx in range(dl_workers):
-                t = threading.Thread(target=self._download_worker, args=(idx, dl_workers), daemon=True)
+                t = threading.Thread(target=self._download_worker, args=(idx, dl_workers, stop_ev), daemon=True)
                 t.start()
                 self._threads.append(t)
 
@@ -171,13 +179,13 @@ class InternetTrafficEngine:
         if self.enable_upload:
             ul_workers = max(1, int(math.ceil(self.worker_count * 0.35)))
             for idx in range(ul_workers):
-                t = threading.Thread(target=self._upload_worker, args=(idx, ul_workers), daemon=True)
+                t = threading.Thread(target=self._upload_worker, args=(idx, ul_workers, stop_ev), daemon=True)
                 t.start()
                 self._threads.append(t)
 
         # 4. Start Web & DNS Transaction Worker
         if self.enable_web or self.enable_dns:
-            t_tx = threading.Thread(target=self._web_and_dns_worker, daemon=True)
+            t_tx = threading.Thread(target=self._web_and_dns_worker, kwargs={"stop_ev": stop_ev}, daemon=True)
             t_tx.start()
             self._threads.append(t_tx)
 
@@ -193,10 +201,11 @@ class InternetTrafficEngine:
         self._threads = []
         self.active_connections = 0
 
-    def _download_worker(self, worker_idx: int, total_dl_workers: int) -> None:
+    def _download_worker(self, worker_idx: int, total_dl_workers: int, stop_ev: Optional[threading.Event] = None) -> None:
+        stop_ev = stop_ev or self._stop_event
         limits = httpx.Limits(max_keepalive_connections=6, max_connections=12)
         with httpx.Client(verify=False, timeout=15.0, limits=limits, follow_redirects=True) as client:
-            while not self._stop_event.is_set() and self.running:
+            while not stop_ev.is_set():
                 if self.target_bps <= 1000:
                     time.sleep(0.25)
                     continue
@@ -210,7 +219,7 @@ class InternetTrafficEngine:
                                 self.completed_requests += 1
                             t_prev = time.perf_counter()
                             for chunk in resp.iter_bytes(chunk_size=131072):
-                                if self._stop_event.is_set() or not self.running:
+                                if stop_ev.is_set():
                                     break
                                 t_now = time.perf_counter()
                                 actual_dt = max(0.0, t_now - t_prev)
@@ -230,11 +239,12 @@ class InternetTrafficEngine:
                 except Exception:
                     time.sleep(0.25)
 
-    def _upload_worker(self, worker_idx: int, total_ul_workers: int) -> None:
+    def _upload_worker(self, worker_idx: int, total_ul_workers: int, stop_ev: Optional[threading.Event] = None) -> None:
+        stop_ev = stop_ev or self._stop_event
         payload_size = 262144  # 256 KB chunks for sustained upstream WAN load
         payload = b"SVV-NET-STUDIO-WAN-TEST-" * (payload_size // 24)
         with httpx.Client(verify=False, timeout=12.0) as client:
-            while not self._stop_event.is_set() and self.running:
+            while not stop_ev.is_set():
                 if self.target_bps <= 1000:
                     time.sleep(0.25)
                     continue
@@ -263,11 +273,12 @@ class InternetTrafficEngine:
                 except Exception:
                     time.sleep(0.3)
 
-    def _web_and_dns_worker(self) -> None:
+    def _web_and_dns_worker(self, stop_ev: Optional[threading.Event] = None) -> None:
+        stop_ev = stop_ev or self._stop_event
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp_sock.settimeout(1.0)
         with httpx.Client(verify=False, timeout=5.0) as client:
-            while not self._stop_event.is_set() and self.running:
+            while not stop_ev.is_set():
                 if self.enable_dns:
                     try:
                         dom = random.choice(DEFAULT_DNS_DOMAINS)
@@ -293,9 +304,10 @@ class InternetTrafficEngine:
                 time.sleep(0.2)
         udp_sock.close()
 
-    def _probe_worker(self) -> None:
+    def _probe_worker(self, stop_ev: Optional[threading.Event] = None) -> None:
         """Continuously measure real WAN/Gateway RTT, RFC 3550 jitter, and packet loss."""
-        while not self._stop_event.is_set() and self.running:
+        stop_ev = stop_ev or self._stop_event
+        while not stop_ev.is_set():
             self._probes_sent += 1
             measured_us: Optional[float] = None
             try:

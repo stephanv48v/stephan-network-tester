@@ -388,6 +388,21 @@ def generate_trex_cfg(
         p0 = port0 or "veth_trex0"
         p1 = port1 or "veth_trex1"
 
+    # SAFETY: never hand the management NIC to TRex (DPDK would unbind it and cut off SSH/web UI),
+    # and only allow plain ifname / PCI-address tokens (values are interpolated into YAML).
+    protected = {"enp216s0", discovery.get("management_interface") or "enp216s0"}
+    for i in ifaces:
+        if i.get("is_management"):
+            protected.add(i.get("ifname"))
+            protected.add(i.get("pci_address"))
+    name_ok = re.compile(r"^[A-Za-z0-9_.:\-]{1,32}$")
+    if (
+        p0 in protected or p1 in protected or p0 == p1
+        or not name_ok.match(str(p0)) or not name_ok.match(str(p1))
+    ):
+        selected_mode = "loopback_sim"
+        p0, p1 = "veth_trex0", "veth_trex1"
+
     # Build YAML with both Stateless L2/L3 and ASTF support
     phys_comment_lines = []
     for i in ifaces:

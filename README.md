@@ -37,7 +37,7 @@ Enterprise-grade network performance testing, **10,000-user stateful workload si
   - Synchronized second-by-second **TRex Load vs. UniFi EFG CPU / Memory / Throughput** correlation timelines.
 - **Read-Only SNMPv2c / SNMPv3 (`IF-MIB`) Collector**:
   - Polls 64-bit `ifHCInOctets` / `ifHCOutOctets`, `ifHCInUcastPkts` / `ifHCOutUcastPkts`, `ifInErrors` / `ifOutErrors`, `ifInDiscards` / `ifOutDiscards`, and operational link state with 64-bit wraparound protection.
-- **Server-Side Fernet Credential Vault**: API keys, controller passwords, and SNMP secrets are encrypted at rest (`/opt/stephan-network-tester/data/.vault.key`) and never returned to browsers or exports. Unavailable metrics explicitly report `"Unavailable"`.
+- **Server-Side Fernet Credential Vault**: API keys, controller passwords, and SNMP secrets are encrypted at rest (`/opt/stephan-network-tester/data/.secret.key`) and never returned to browsers or exports. Unavailable metrics explicitly report `"Unavailable"`.
 
 ### 3. Dell R640 Hardware & UniFi EFG LAN-to-WAN Topology Assessment
 - **Management NIC Lockout Shield**: Protects `enp216s0` (`10.20.30.237/24`) from DPDK unbinding at all times.
@@ -46,12 +46,16 @@ Enterprise-grade network performance testing, **10,000-user stateful workload si
   - `veth_trex0` ↔ `veth_trex1`: Internal TRex self-test loopback when physical test ports are unpatched.
   - Full **`10 Gbps` LAN-to-WAN hairpin** across the EFG requires adding a dual-port `10GbE SFP+` NIC (`Intel X710` / `Mellanox ConnectX-5`) or an external `10GbE` WAN responder.
 
-### 4. Enterprise Light-Mode UI (20 Navigation Views)
-- **Overview**: Dashboard, Live Monitoring (5 synchronized tabs)
-- **Test Studio**: Quick Test (with Pre-Flight Validation), Traffic Mix Builder (100% weight validator), Application Simulation, Traffic Profiles, RFC 2544 / Benchmarking, Stress & Soak Testing (phased ramp-up/steady/ramp-down & staged load steps), Test Scheduler
-- **Results**: Test History, Side-by-Side Run Comparison, Reports & Exports
-- **Infrastructure**: UniFi Stack Monitoring, Interactive Network Topology, NICs & Ports, TRex Engine Control, Dell R640 Server Health & Diagnostics
-- **Administration**: Appliance Configuration, API Integrations (UniFi & SNMP), User Access, Audit Logs
+### 4. Simple 6-Section UI
+The sidebar has six sections; each one shows its pages as tabs across the top.
+- **Home**: status banner, 4 key numbers, live throughput chart, one-click tests (engine self-test, firewall load test with any user count up to 100,000, internet speed & quality, frame-size benchmark), recent results, UniFi and server health
+- **Run a Test**: Custom Test (with pre-flight check), App Simulation, Traffic Mix, Stress & Soak (custom user-scale test up to 100,000 users), Benchmark (RFC 2544-style), Saved Profiles, Schedule
+- **Live View**: throughput, latency, connections, errors and gateway load for the running test
+- **Results & Reports**: History, Compare, Reports (PDF / CSV / JSON)
+- **My Network**: UniFi, Topology, Ports
+- **System & Settings**: Server Health, TRex Engine, Integrations, Settings, Users, Audit Log
+
+User counts are free-entry from 1 to **100,000** (one emulated client IP per user, `16.0.0.1`–`16.1.134.160` at the maximum).
 
 ### 5. Client-Ready Multi-Page Light-Mode Reports (`PDF` / `CSV` / `JSON`)
 - **9-Page Full Technical PDF Report**, **3-Page Executive Summary PDF**, and **Side-by-Side Comparison PDF** featuring light-mode charts, traffic mix breakdowns, latency percentile tables (`Avg` / `P95` / `P99` / `Max` / `Jitter`), UniFi EFG correlation, and explicit threshold evaluation (**Pass/Fail** is evaluated and displayed **only** when explicit SLA thresholds are enabled; otherwise runs conclude as **Completed**).

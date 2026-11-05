@@ -385,7 +385,7 @@ const InfraPages = {
   renderServerHealth() {
     const el = document.getElementById('page-server-health');
     const f = App.latest || {};
-    const cores = (f.per_cpu_pct || Array(32).fill(0)).map((v, idx) => `
+    const cores = (f.per_cpu_pct || []).map((v, idx) => `
       <div style="background:#F8FAFC;border:1px solid var(--border-color);border-radius:6px;padding:7px;text-align:center;">
         <div style="font-size:10.5px;color:var(--text-secondary);">CPU ${idx}</div>
         <div style="font-weight:700;font-size:13px;color:${v > 80 ? '#DC2626' : '#17243A'};">${Number(v).toFixed(0)}%</div>
@@ -394,9 +394,9 @@ const InfraPages = {
 
     el.innerHTML = `
       <div class="grid-3" style="margin-bottom:16px;">
-        <div class="card"><div class="card-subtitle">Total CPU Utilisation</div><div class="kpi-value">${Number(f.cpu_pct || 0).toFixed(1)}%</div><div class="kpi-foot">2 &times; Intel Xeon Silver 4110 (32 Logical Cores)</div></div>
-        <div class="card"><div class="card-subtitle">System Memory (ECC DDR4)</div><div class="kpi-value">${f.ram_used_gb || 0} / ${Math.round(f.ram_total_gb || 500)} <span class="kpi-unit">GB</span></div><div class="kpi-foot">${Number(f.ram_pct || 0).toFixed(1)}% Allocated (Includes 8 GB DPDK HugePages)</div></div>
-        <div class="card"><div class="card-subtitle">NVMe Root Storage</div><div class="kpi-value">${f.storage?.used_gb || 13} / ${f.storage?.total_gb || 231} <span class="kpi-unit">GB</span></div><div class="kpi-foot">${f.storage?.percent || 6}% Used &bull; SQLite WAL Active</div></div>
+        <div class="card"><div class="card-subtitle">Total CPU Utilisation</div><div class="kpi-value">${Number(f.cpu_pct || 0).toFixed(1)}%</div><div class="kpi-foot">${(f.per_cpu_pct || []).length || '—'} logical cores</div></div>
+        <div class="card"><div class="card-subtitle">System Memory</div><div class="kpi-value">${f.ram_used_gb ?? '—'} / ${f.ram_total_gb ? Math.round(f.ram_total_gb) : '—'} <span class="kpi-unit">GB</span></div><div class="kpi-foot">${Number(f.ram_pct || 0).toFixed(1)}% used (includes DPDK HugePages)</div></div>
+        <div class="card"><div class="card-subtitle">Root Storage</div><div class="kpi-value">${f.storage?.used_gb ?? '—'} / ${f.storage?.total_gb ?? '—'} <span class="kpi-unit">GB</span></div><div class="kpi-foot">${f.storage?.percent != null ? f.storage.percent + '% used' : 'Unavailable'}</div></div>
       </div>
 
       <div class="card" style="margin-bottom:16px;">

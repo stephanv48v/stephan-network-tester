@@ -818,3 +818,73 @@ input[type="range"] {
 .mono {
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
+
+/* ==========================================================================
+   v5 simplified layout: 6-section sidebar, section tabs, Home page
+   ========================================================================== */
+.nav-item { padding: 11px 14px; font-size: 14px; margin: 3px 0; position: relative; }
+.nav-item svg { width: 18px; height: 18px; }
+.nav-live-dot {
+  display: none; margin-left: auto; width: 9px; height: 9px; border-radius: 50%;
+  background: #4ADE80; box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7); animation: livePulse 1.6s infinite;
+}
+.nav-live-dot.on { display: inline-block; }
+@keyframes livePulse {
+  0% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.6); }
+  70% { box-shadow: 0 0 0 8px rgba(74, 222, 128, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); }
+}
+.section-tabs { margin-bottom: 16px; }
+
+.hero-card {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  padding: 18px 22px; margin-bottom: 16px; border-radius: var(--radius-card);
+  background: var(--bg-card); border: 1px solid var(--border-color); box-shadow: var(--shadow-card);
+  border-left: 5px solid #64748B;
+}
+.hero-card.idle { border-left-color: var(--primary); }
+.hero-card.running { border-left-color: var(--success); background: linear-gradient(90deg, var(--success-bg), var(--bg-card) 60%); }
+.hero-card.warn { border-left-color: var(--warning); background: linear-gradient(90deg, var(--warning-bg), var(--bg-card) 60%); }
+.hero-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.hero-dot { width: 14px; height: 14px; border-radius: 50%; background: #64748B; flex-shrink: 0; }
+.hero-card.idle .hero-dot { background: var(--primary); }
+.hero-card.running .hero-dot { background: var(--success); animation: livePulse 1.6s infinite; }
+.hero-card.warn .hero-dot { background: var(--warning); }
+.hero-title { font-size: 18px; font-weight: 700; }
+.hero-sub { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+.hero-actions { display: flex; gap: 8px; }
+
+.kpi-strip.kpi-strip-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 900px) { .kpi-strip.kpi-strip-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.grid-home { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; margin-bottom: 16px; }
+.grid-home-bot { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 14px; margin-bottom: 16px; }
+@media (max-width: 1300px) { .grid-home, .grid-home-bot { grid-template-columns: 1fr; } }
+
+.preset-list { display: flex; flex-direction: column; gap: 8px; }
+.preset-btn {
+  display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto; column-gap: 10px;
+  text-align: left; width: 100%; padding: 10px 12px; cursor: pointer; font-family: inherit;
+  background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: var(--radius-ctrl);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.preset-btn:hover { border-color: var(--primary); background: var(--info-bg); }
+.preset-title { font-weight: 700; font-size: 13px; color: var(--text-main); }
+.preset-desc { grid-row: 2; font-size: 11.5px; color: var(--text-secondary); }
+.preset-go { grid-row: 1 / span 2; grid-column: 2; align-self: center; font-weight: 700; font-size: 12px; color: var(--primary); }
+
+.health-list { display: flex; flex-direction: column; gap: 4px; }
+.health-row { display: flex; justify-content: space-between; font-size: 12px; margin-top: 6px; }
+.health-row span { color: var(--text-secondary); font-weight: 600; }
+.health-summary {
+  display: flex; align-items: center; gap: 9px; margin-top: 14px; padding: 9px 10px; cursor: pointer;
+  background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: var(--radius-ctrl);
+}
+
+/* Users field quick-pick chips */
+.chip-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.chip-btn {
+  padding: 2px 9px; font-size: 11.5px; font-weight: 600; font-family: inherit; cursor: pointer;
+  border: 1px solid var(--border-color); border-radius: 999px; background: var(--bg-subtle); color: var(--text-secondary);
+}
+.chip-btn:hover { border-color: var(--primary); color: var(--primary); background: var(--info-bg); }

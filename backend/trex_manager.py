@@ -120,7 +120,7 @@ except Exception:
     TREX_ASTF_AVAILABLE = False
 
 import database as db
-from astf_builder import build_astf_enterprise_profile, compute_client_ip_range
+from astf_builder import MAX_SIMULATED_USERS, build_astf_enterprise_profile, compute_client_ip_range
 from internet_generator import internet_engine
 from profiles import (
     EFG_USER_SCENARIOS,
@@ -177,6 +177,7 @@ def _percentile_from_trex_histogram(hist: Union[Dict[Any, Any], List[Dict[str, A
 
 def _zmq_query_server_mode(timeout_ms: int = 600) -> Optional[Dict[str, Any]]:
     """Query TRex ZMQ RPC port 4501 directly to inspect running mode ('ASTF' or 'STL') and version."""
+    sock = None
     try:
         ctx = zmq.Context.instance()
         sock = ctx.socket(zmq.REQ)
@@ -186,13 +187,19 @@ def _zmq_query_server_mode(timeout_ms: int = 600) -> Optional[Dict[str, Any]]:
         sock.connect("tcp://127.0.0.1:4501")
         sock.send_string(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "get_version", "params": {}}))
         raw = sock.recv_string()
-        sock.close()
         resp = json.loads(raw)
         res = resp.get("result")
         if isinstance(res, dict) and res.get("version"):
             return res
     except Exception:
         pass
+    finally:
+        # Always close: a timed-out REQ socket was previously leaked on every failed probe
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
     return None
 
 
@@ -232,6 +239,7 @@ class TRexEngineManager:
         self.ramp_down_sec: int = 15
         self.current_phase: str = "idle"
         self._last_applied_mult: float = 1.0
+        self._astf_calib_bps: float = 0.0  # bps the loaded ASTF profile's CPS values were calibrated for
 
         # Staged Step-Ramp Configuration (10%, 25%, 50%, 75%, 90%, 100%)
         self.ramp_steps_pct: List[float] = [10.0, 25.0, 50.0, 75.0, 90.0, 100.0]
@@ -260,7 +268,12 @@ class TRexEngineManager:
     def _disconnect_client_unlocked(self) -> None:
         if self.client is not None:
             try:
-                self.client.disconnect()
+                if self.running:
+                    # Reconnect after a transient get_stats error mid-test: the default disconnect()
+                    # (stop_traffic=True) would silently kill the running test's traffic on the server.
+                    self.client.disconnect(stop_traffic=False)
+                else:
+                    self.client.disconnect()
             except Exception:
                 pass
         self.client = None
@@ -290,14 +303,16 @@ class TRexEngineManager:
                 db.log_audit("TRex Engine", "Mode Switch Failed", desired, str(e))
                 return False
 
-        # Wait up to 8 seconds for ZMQ port 4501 to come online in the new mode
-        for _ in range(16):
+        # Wait up to ~30 seconds for ZMQ port 4501 to come online in the new mode (DPDK init can exceed 8s)
+        for _ in range(60):
             time.sleep(0.5)
             v2 = _zmq_query_server_mode(timeout_ms=500)
-            if v2 and str(v2.get("mode", "")).upper() == desired:
+            if v2 and (str(v2.get("mode", "")).upper() == desired or "mode" not in v2):
                 self.trex_daemon_mode = desired
-                return self.try_connect_trex(preferred_mode=desired)
-        return self.try_connect_trex(preferred_mode=desired)
+                break
+        ok = self.try_connect_trex(preferred_mode=desired)
+        # Only report success if we are actually attached in the requested mode (not the old/other mode)
+        return bool(ok and self.client is not None and self.client_mode == desired)
 
     def try_connect_trex(self, preferred_mode: Optional[str] = None) -> bool:
         with self._lock:
@@ -411,9 +426,15 @@ class TRexEngineManager:
         c_start, c_end, ip_cnt = compute_client_ip_range(req.get("src_ip_start", "16.0.0.1"), users)
         checks.append({
             "check": "Emulated User IP Pool",
-            "status": "ok",
-            "detail": f"{ip_cnt:,} distinct client IPs ({c_start} - {c_end}) mapped to Port 0.",
+            "status": "ok" if users <= MAX_SIMULATED_USERS else "warning",
+            "detail": f"{ip_cnt:,} distinct client IPs ({c_start} - {c_end}) mapped to Port 0."
+            + (f" Requested {users:,} users; capped at {MAX_SIMULATED_USERS:,}." if users > MAX_SIMULATED_USERS else ""),
         })
+        if ip_cnt > 20000 and engine_type in ("trex_astf", "hybrid"):
+            warnings_list.append(
+                f"{ip_cnt:,} users means {ip_cnt:,} client IPs/ARP-NAT entries on the gateway. "
+                "Watch gateway CPU/memory and the conntrack table; concurrent flows depend on target throughput, not just user count."
+            )
 
         unifi_ok = bool(unifi_collector.latest_snapshot.get("connected"))
         checks.append({
@@ -436,8 +457,13 @@ class TRexEngineManager:
         vlan_id = int(cfg.get("vlan_id", profile.get("vlan_id", 0)) or 0)
         dscp = int(cfg.get("dscp", profile.get("dscp", 0)) or 0)
         users = int(cfg.get("simulated_users", 10000))
-        c_start, c_end, _ = compute_client_ip_range(cfg.get("src_ip_start", "16.0.0.1" if port_idx == 0 else "48.0.0.1"), users)
-        d_start, d_end, _ = compute_client_ip_range(cfg.get("dst_ip_start", "48.0.0.1" if port_idx == 0 else "16.0.0.1"), min(1024, max(16, users // 10)))
+        src_base = cfg.get("src_ip_start") or "16.0.0.1"
+        dst_base = cfg.get("dst_ip_start") or "48.0.0.1"
+        if port_idx == 1:
+            # Reverse direction (WAN -> LAN): previously port 1 also sent LAN-sourced 16.x -> 48.x packets
+            src_base, dst_base = dst_base, src_base
+        c_start, c_end, _ = compute_client_ip_range(src_base, users)
+        d_start, d_end, _ = compute_client_ip_range(dst_base, min(1024, max(16, users // 10)))
 
         ip_off = 18 if vlan_id > 0 else 14
         vm_cmds = [
@@ -448,7 +474,9 @@ class TRexEngineManager:
             STLVmFixIpv4(offset=ip_off),
         ]
 
-        mix = cfg.get("protocol_mix") or profile.get("protocol_mix")
+        # Explicit request mix wins; otherwise fixed-frame benchmark profiles (64B / 1518B / 9000B ...) must use
+        # their own "streams" (previously their protocol_mix silently replaced e.g. 64B frames with 96-160B frames).
+        mix = cfg.get("protocol_mix") or (None if profile.get("streams") else profile.get("protocol_mix"))
         if mix and isinstance(mix, dict) and not cfg.get("override_frame_size"):
             stream_defs = build_streams_from_workload_mix(mix, vlan_id=vlan_id, default_dscp=dscp)
         else:
@@ -472,7 +500,9 @@ class TRexEngineManager:
             l4 = (
                 TCP(sport=int(sdef.get("sport", 40000)), dport=int(sdef.get("dport", 443)), flags="PA")
                 if str(sdef.get("proto", "UDP")).upper() == "TCP"
-                else UDP(sport=int(sdef.get("sport", 40000)), dport=int(sdef.get("dport", 443)))
+                # chksum=0: the field engine rewrites IP src/dst but only fixes the IPv4 checksum, so a computed
+                # UDP checksum would be invalid (conntrack on the DUT marks such packets INVALID and drops them)
+                else UDP(sport=int(sdef.get("sport", 40000)), dport=int(sdef.get("dport", 443)), chksum=0)
             )
             base_pkt = l2 / l3 / l4
             pad_len = max(0, pkt_sz - len(base_pkt) - 4)
@@ -513,8 +543,11 @@ class TRexEngineManager:
                 return False
 
             if self.client_mode == "ASTF" and self.traffic_engine in ("trex_astf", "hybrid"):
+                # ASTF mult scales the CPS the profile was built with; express it relative to that calibration
+                # so live rate changes (update_rate) survive later phase transitions.
+                astf_mult = (self.target_bps / self._astf_calib_bps) if self._astf_calib_bps > 0 else frac
                 try:
-                    self.client.update(mult=round(frac, 3))
+                    self.client.update(mult=round(max(0.001, astf_mult), 3))
                     return True
                 except Exception:
                     return False
@@ -560,7 +593,7 @@ class TRexEngineManager:
             self.traffic_engine = requested_engine or str(prof.get("traffic_engine") or "trex_astf")
         self.direction = str(req.get("direction", "bidirectional" if self.traffic_engine == "trex_astf" else "unidirectional"))
         self.test_mode = str(req.get("test_mode") or req.get("mode") or ("phased" if self.traffic_engine == "trex_astf" else "timed"))
-        self.simulated_users = max(1, min(65000, int(req.get("simulated_users", prof.get("default_users", 10000)))))
+        self.simulated_users = max(1, min(MAX_SIMULATED_USERS, int(req.get("simulated_users", prof.get("default_users", 10000)))))
         self.simulated_devices = max(1, min(250000, int(req.get("simulated_devices", prof.get("default_devices", self.simulated_users * 2)))))
         self.link_capacity_mbps = max(10, min(100000, int(req.get("link_capacity_mbps", 10000))))
 
@@ -595,6 +628,8 @@ class TRexEngineManager:
             self.current_step_index = 0
             self.rate_pct = self.ramp_steps_pct[0]
             self.target_bps = (self.link_capacity_mbps * 1_000_000.0) * (self.rate_pct / 100.0)
+            # Engines start at base_target_bps; without this, step 1 ran at the full requested target
+            self.base_target_bps = self.target_bps
             self.duration_sec = len(self.ramp_steps_pct) * self.ramp_step_sec
             self.current_phase = f"step_1_{int(self.rate_pct)}pct"
         elif self.test_mode == "continuous":
@@ -608,6 +643,11 @@ class TRexEngineManager:
         eff_frame = compute_effective_frame_size(self.profile_id, {**req, "protocol_mix": norm_mix})
         if req.get("override_frame_size"):
             eff_frame = max(64, min(9000, int(req["override_frame_size"])))
+        elif self.traffic_engine in ("trex_stl", "hybrid") and not req.get("protocol_mix") and prof.get("streams"):
+            # Report the frame size of the fixed STL streams actually transmitted (see _build_trex_stl_streams)
+            _sw = sum(float(s.get("weight", 0) or 0) for s in prof["streams"])
+            if _sw > 0:
+                eff_frame = int(round(sum(int(s.get("size", 576)) * float(s.get("weight", 0) or 0) for s in prof["streams"]) / _sw))
 
         c_start, c_end, ip_cnt = compute_client_ip_range(req.get("src_ip_start", "16.0.0.1"), self.simulated_users)
         self.emulated_client_ips = ip_cnt
@@ -629,7 +669,10 @@ class TRexEngineManager:
 
         hw_snap = self.get_hardware_snapshot()
         self.astf_meta = {}
+        self._last_applied_mult = 1.0
+        self._astf_calib_bps = 0.0
         trex_started = False
+        start_error = ""
 
         # Start selected TRex Engine Mode
         if self.traffic_engine == "trex_astf":
@@ -647,6 +690,7 @@ class TRexEngineManager:
                             dst_ip_base=req.get("dst_ip_start", "48.0.0.1"),
                         )
                         self.astf_meta = meta
+                        self._astf_calib_bps = self.base_target_bps
                         self.client.load_profile(astf_prof)
                         init_mult = 0.15 if (self.test_mode in ("phased", "soak") and self.ramp_up_sec > 0) else 1.0
                         self._last_applied_mult = init_mult
@@ -657,7 +701,10 @@ class TRexEngineManager:
                         )
                         trex_started = True
                     except Exception as e:
+                        start_error = f"ASTF start failed: {e}"
                         db.log_audit("TRex ASTF Engine", "ASTF Start Error", self.profile_id, str(e))
+            else:
+                start_error = "TRex engine is not reachable in ASTF mode (check trex-server.service)"
 
         elif self.traffic_engine in ("trex_stl", "hybrid"):
             if self.ensure_trex_daemon_mode("STL") and self.client is not None and TREX_STL_AVAILABLE:
@@ -672,7 +719,8 @@ class TRexEngineManager:
                             "simulated_users": self.simulated_users,
                             "src_ip_start": req.get("src_ip_start", "16.0.0.1"),
                             "dst_ip_start": req.get("dst_ip_start", "48.0.0.1"),
-                            "protocol_mix": norm_mix,
+                            # Only an explicitly requested mix overrides the profile's fixed STL streams
+                            "protocol_mix": norm_mix if req.get("protocol_mix") else None,
                             "override_frame_size": req.get("override_frame_size"),
                         }
                         for p_idx in ports:
@@ -688,7 +736,14 @@ class TRexEngineManager:
                             self.client.start(ports=ports, mult=f"{max(1.0, min(100.0, self.rate_pct * init_frac))}%", duration=-1 if self.duration_sec <= 0 else self.duration_sec + 2)
                         trex_started = True
                     except Exception as e:
+                        start_error = f"STL start failed: {e}"
                         db.log_audit("TRex STL Engine", "STL Start Error", self.profile_id, str(e))
+            else:
+                start_error = "TRex engine is not reachable in STL mode (check trex-server.service)"
+
+        # Don't record a "running" test full of zeros when the traffic generator never started.
+        if self.traffic_engine in ("trex_astf", "trex_stl") and not trex_started:
+            return {"status": "error", "run_id": None, "error": start_error or "TRex did not start"}
 
         internet_started = False
         if self.traffic_engine in ("internet_wan", "hybrid"):
@@ -802,17 +857,13 @@ class TRexEngineManager:
 
     def update_rate(self, rate_pct: float) -> Dict[str, Any]:
         new_pct = max(0.5, min(100.0, float(rate_pct)))
-        old_base = max(1.0, self.base_target_bps)
         new_bps = (self.link_capacity_mbps * 1_000_000.0) * (new_pct / 100.0)
         self.rate_pct = new_pct
         if self.running:
-            if self.traffic_engine == "trex_astf":
-                ratio = new_bps / old_base
-                self._apply_live_multiplier(self._last_applied_mult * ratio)
+            # Keep the current phase fraction (ramp-up/down); ASTF mult is derived from _astf_calib_bps
+            if self.traffic_engine in ("trex_astf", "trex_stl", "hybrid"):
                 self.base_target_bps = new_bps
-            elif self.traffic_engine in ("trex_stl", "hybrid"):
-                self.base_target_bps = new_bps
-                self._apply_live_multiplier(1.0)
+                self._apply_live_multiplier(self._last_applied_mult)
             if self.traffic_engine in ("internet_wan", "hybrid"):
                 self.base_target_bps = new_bps
                 self.target_bps = new_bps
@@ -830,8 +881,10 @@ class TRexEngineManager:
         link_capacity_mbps: Optional[int] = None,
     ) -> Dict[str, Any]:
         if simulated_users is not None:
-            self.simulated_users = max(1, min(65000, int(simulated_users)))
-            _, _, self.emulated_client_ips = compute_client_ip_range("16.0.0.1", self.simulated_users)
+            self.simulated_users = max(1, min(MAX_SIMULATED_USERS, int(simulated_users)))
+            if not self.running:
+                # The loaded TRex profile's IP pool is not regenerated mid-test; don't report IPs that aren't emulated
+                _, _, self.emulated_client_ips = compute_client_ip_range("16.0.0.1", self.simulated_users)
         if simulated_devices is not None:
             self.simulated_devices = max(1, min(250000, int(simulated_devices)))
         if protocol_mix is not None:
@@ -850,16 +903,22 @@ class TRexEngineManager:
         }
 
     def stop_test(self, status: str = "completed") -> Dict[str, Any]:
-        was_running = self.running
-        run_id = self.active_run_id
-        self.running = False
-        self.current_phase = "idle"
-
         with self._lock:
-            if self.trex_connected and self.client is not None:
+            # Atomic read-and-clear: stop_test can race between the telemetry thread (duration end) and HTTP/WS stop
+            was_running = self.running
+            run_id = self.active_run_id
+            self.running = False
+            self.active_run_id = None
+            self.current_phase = "idle"
+
+            # Attempt stop even if trex_connected was cleared by a transient get_stats error
+            if self.client is not None:
                 try:
                     if self.client_mode == "ASTF":
-                        self.client.stop(is_remove=True)
+                        try:
+                            self.client.stop(is_remove=True)
+                        except TypeError:
+                            self.client.stop()
                     else:
                         self.client.stop(ports=[0, 1])
                 except Exception:
@@ -1054,7 +1113,7 @@ class TRexEngineManager:
         ram_total_gb = round(vm.total / (1024 ** 3), 1)
 
         hw = self.get_hardware_snapshot()
-        storage = hw.get("storage", {"used_gb": 13.0, "total_gb": 231.0, "percent": 6.0})
+        storage = hw.get("storage") or {}  # never substitute hardcoded disk figures
 
         if not self.trex_connected and int(now) % 5 == 0:
             self.try_connect_trex()

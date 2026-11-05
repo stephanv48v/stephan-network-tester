@@ -88,7 +88,7 @@ const StudioPages = {
             </div>
             <div class="form-group">
               <label class="form-label">Simulated Concurrent Users</label>
-              <input type="number" class="form-control" id="qtFullUsers" min="1" max="65000" value="10000" />
+              ${App.usersField('qtFullUsers', 10000)}
             </div>
             <div class="form-group">
               <label class="form-label">Target Throughput (Gbps)</label>
@@ -189,7 +189,7 @@ const StudioPages = {
       name: document.getElementById('qtFullRunName').value.trim(),
       profile_id: document.getElementById('qtFullProfile').value,
       traffic_engine: document.getElementById('qtFullEngine').value,
-      simulated_users: parseInt(document.getElementById('qtFullUsers').value, 10) || 10000,
+      simulated_users: App.readUsers('qtFullUsers'),
       target_gbps: parseFloat(document.getElementById('qtFullGbps').value) || 5.0,
       test_mode: mode,
       duration_sec: dur,
@@ -272,14 +272,7 @@ const StudioPages = {
           </div>
           <div class="form-group">
             <label class="form-label">Simulated Users</label>
-            <select class="form-control" id="tmbUsers">
-              <option value="500">500</option>
-              <option value="1000">1,000</option>
-              <option value="2500">2,500</option>
-              <option value="5000">5,000</option>
-              <option value="7500">7,500</option>
-              <option value="10000" selected>10,000</option>
-            </select>
+            ${App.usersField('tmbUsers', 10000)}
           </div>
           <div class="form-group">
             <label class="form-label">Target Throughput (Gbps)</label>
@@ -416,7 +409,7 @@ const StudioPages = {
   async saveCustomMixProfile() {
     this.normalizeMixSliders();
     const name = document.getElementById('tmbName').value.trim() || 'Custom Enterprise Mix';
-    const users = parseInt(document.getElementById('tmbUsers').value, 10) || 10000;
+    const users = App.readUsers('tmbUsers');
     const gbps = parseFloat(document.getElementById('tmbGbps').value) || 5.0;
     const engine = document.getElementById('tmbEngine').value;
     try {
@@ -443,7 +436,7 @@ const StudioPages = {
   async launchCustomMixNow() {
     this.normalizeMixSliders();
     const name = document.getElementById('tmbName').value.trim() || 'Custom Enterprise Mix';
-    const simulated_users = parseInt(document.getElementById('tmbUsers').value, 10) || 10000;
+    const simulated_users = App.readUsers('tmbUsers');
     const target_gbps = parseFloat(document.getElementById('tmbGbps').value) || 5.0;
     const duration_sec = parseInt(document.getElementById('tmbDuration').value, 10) || 300;
     const traffic_engine = document.getElementById('tmbEngine').value;
@@ -523,7 +516,7 @@ const StudioPages = {
           <div class="grid-2" style="gap:10px;">
             <div class="form-group">
               <label class="form-label">Simulated Users</label>
-              <input type="number" class="form-control" id="astfSimUsers" value="10000" />
+              ${App.usersField('astfSimUsers', 10000)}
             </div>
             <div class="form-group">
               <label class="form-label">Target Load (Gbps)</label>
@@ -566,7 +559,7 @@ const StudioPages = {
   },
 
   async launchAstfAppSim() {
-    const users = parseInt(document.getElementById('astfSimUsers').value, 10) || 10000;
+    const users = App.readUsers('astfSimUsers');
     const gbps = parseFloat(document.getElementById('astfSimGbps').value) || 5.0;
     await App.startTestRequest({
       name: `Stateful Enterprise App Simulation (${users.toLocaleString()} Users)`,
@@ -764,6 +757,33 @@ const StudioPages = {
     el.innerHTML = `
       <div class="card" style="margin-bottom:16px;">
         <div class="card-header">
+          <div class="card-title">&#128101; Custom user-scale test (up to 100,000 users)</div>
+        </div>
+        <div class="grid-4" style="gap:12px;align-items:start;">
+          <div class="form-group">
+            <label class="form-label">Users</label>
+            ${App.usersField('ssUsers', 25000)}
+          </div>
+          <div class="form-group">
+            <label class="form-label">Target throughput (Gbps)</label>
+            <input type="number" class="form-control" id="ssGbps" min="0.01" max="100" step="0.1" value="1.0" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Steady time (minutes)</label>
+            <input type="number" class="form-control" id="ssMinutes" min="1" max="1440" step="1" value="5" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">&nbsp;</label>
+            <button class="btn btn-primary btn-block" onclick="StudioPages.runCustomScaleTest()">&#9654; Start scale test</button>
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--text-secondary);margin-top:4px;">
+          Each user gets its own client IP. Ramp-up is longer for big numbers so the gateway is loaded gradually.
+        </p>
+      </div>
+
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header">
           <div class="card-title">&#128200; Staged Load-Step Saturation Finder (10% &rarr; 25% &rarr; 50% &rarr; 75% &rarr; 90% &rarr; 100%)</div>
           <button class="btn btn-primary btn-sm" onclick="StudioPages.runStagedStepTest()">&#9654; Start 6-Stage Saturation Ramp</button>
         </div>
@@ -782,13 +802,32 @@ const StudioPages = {
     App.navigate('live-monitoring');
   },
 
+  async runCustomScaleTest() {
+    const users = App.readUsers('ssUsers', 25000);
+    const gbps = Math.max(0.01, parseFloat(document.getElementById('ssGbps').value) || 1.0);
+    const steady = Math.max(1, parseInt(document.getElementById('ssMinutes').value, 10) || 5) * 60;
+    await App.startTestRequest({
+      name: `${users.toLocaleString()} users — scale test @ ${gbps} Gbps`,
+      profile_id: 'imix',
+      traffic_engine: 'trex_astf',
+      test_mode: 'phased',
+      simulated_users: users,
+      simulated_devices: users * 2,
+      target_gbps: gbps,
+      ramp_up_sec: users > 50000 ? 120 : users > 20000 ? 60 : 30,
+      steady_sec: steady,
+      ramp_down_sec: users > 50000 ? 60 : 20,
+    });
+    App.navigate('live-monitoring');
+  },
+
   async runStagedStepTest() {
     await App.startTestRequest({
       name: 'EFG 6-Stage Saturation Ramp (10% -> 100%)',
       profile_id: 'imix',
       traffic_engine: 'trex_stl',
       test_mode: 'step_ramp',
-      simulated_users: 10000,
+      simulated_users: App.readUsers('ssUsers', 10000),
       ramp_steps_pct: [10, 25, 50, 75, 90, 100],
       ramp_step_sec: 15,
     });
@@ -835,7 +874,7 @@ const StudioPages = {
             </div>
             <div class="form-group">
               <label class="form-label">Simulated Users</label>
-              <input type="number" class="form-control" id="schUsers" value="10000" />
+              ${App.usersField('schUsers', 10000)}
             </div>
             <div class="form-group">
               <label class="form-label">Duration (sec)</label>
@@ -865,7 +904,7 @@ const StudioPages = {
         name: document.getElementById('schName').value.trim(),
         cron_expr: document.getElementById('schCron').value.trim(),
         profile_id: document.getElementById('schProf').value,
-        simulated_users: parseInt(document.getElementById('schUsers').value, 10) || 10000,
+        simulated_users: App.readUsers('schUsers'),
         duration_sec: parseInt(document.getElementById('schDur').value, 10) || 300,
         test_mode: 'phased',
       }),

@@ -84,7 +84,11 @@ class SNMPTelemetryCollector:
         return self.get_config_public()
 
     def _build_snmp_args(self, cfg: Dict[str, Any]) -> List[str]:
-        target = f"{cfg.get('host', '10.20.30.1')}:{int(cfg.get('port', 161))}"
+        host = str(cfg.get("host", "10.20.30.1"))
+        # target is the last positional argv; a leading '-' would be parsed as an option (e.g. -Lf <file> => root file write)
+        if not re.match(r"^(?!-)[A-Za-z0-9.\-]{1,253}$", host):
+            raise ValueError("Invalid SNMP host (expected hostname or IPv4 address)")
+        target = f"{host}:{int(cfg.get('port', 161))}"
         ver = cfg.get("version", "v3")
         if ver == "v2c":
             comm = db.decrypt_secret(cfg.get("community_enc", "")) or "public"

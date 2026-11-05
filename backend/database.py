@@ -19,7 +19,8 @@ try:
 except Exception:
     FERNET_AVAILABLE = False
 
-DB_DIR = Path("/opt/stephan-network-tester/data")
+# STEPHAN_DATA_DIR lets local/dev runs keep their DB elsewhere; the appliance uses the default.
+DB_DIR = Path(os.environ.get("STEPHAN_DATA_DIR") or "/opt/stephan-network-tester/data")
 if not DB_DIR.exists():
     try:
         DB_DIR.mkdir(parents=True, exist_ok=True)
@@ -37,11 +38,14 @@ def _get_fernet() -> Optional[Any]:
     try:
         if not KEY_PATH.exists():
             key = Fernet.generate_key()
-            KEY_PATH.write_bytes(key)
+            # Create atomically with 0600 (no world-readable window, no clobbering by a concurrent creator)
             try:
-                os.chmod(KEY_PATH, 0o600)
-            except Exception:
-                pass
+                fd = os.open(str(KEY_PATH), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                fd = None
+            if fd is not None:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(key)
         return Fernet(KEY_PATH.read_bytes().strip())
     except Exception:
         # Deterministic machine-local fallback key derived from machine-id
@@ -531,60 +535,56 @@ def finalize_test_run(run_id: int, status: str = "completed") -> Optional[Dict[s
 
             # Strict threshold evaluation: Pass/Fail ONLY when explicit thresholds were configured
             threshold_checks = []
-            if thresholds and isinstance(thresholds, dict) and thresholds.get("enabled"):
-                passed_all = True
-                if thresholds.get("min_rx_mbps") is not None:
-                    req_mbps = float(thresholds["min_rx_mbps"])
+            thresholds_enabled = bool(isinstance(thresholds, dict) and thresholds.get("enabled"))
+            if thresholds_enabled:
+                def _thr(key: str) -> Optional[float]:
+                    # Tolerate "" / non-numeric values from the UI instead of crashing finalize (run would stay 'running')
+                    try:
+                        v = thresholds.get(key)
+                        return None if v is None or v == "" else float(v)
+                    except (TypeError, ValueError):
+                        return None
+
+                def _check(metric: str, requirement: str, actual: str, ok: Optional[bool]) -> None:
+                    # ok=None => threshold configured but the metric was not measured: never counts as PASS
+                    threshold_checks.append({
+                        "metric": metric,
+                        "requirement": requirement,
+                        "actual": actual if ok is not None else "Not measured",
+                        "outcome": "NOT MEASURED" if ok is None else ("PASS" if ok else "FAIL"),
+                    })
+
+                req_mbps = _thr("min_rx_mbps")
+                if req_mbps is not None:
                     actual_mbps = avg_rx_bps / 1e6
-                    ok = actual_mbps >= req_mbps
-                    passed_all = passed_all and ok
-                    threshold_checks.append({
-                        "metric": "Average RX Throughput",
-                        "requirement": f">= {req_mbps:.2f} Mbps",
-                        "actual": f"{actual_mbps:.2f} Mbps",
-                        "outcome": "PASS" if ok else "FAIL",
-                    })
-                if thresholds.get("max_loss_pct") is not None:
-                    req_loss = float(thresholds["max_loss_pct"])
-                    ok = overall_drop_pct <= req_loss
-                    passed_all = passed_all and ok
-                    threshold_checks.append({
-                        "metric": "Packet Loss",
-                        "requirement": f"<= {req_loss:.4f}%",
-                        "actual": f"{overall_drop_pct:.4f}%",
-                        "outcome": "PASS" if ok else "FAIL",
-                    })
-                if thresholds.get("max_avg_latency_us") is not None and avg_lat > 0:
-                    req_lat = float(thresholds["max_avg_latency_us"])
-                    ok = avg_lat <= req_lat
-                    passed_all = passed_all and ok
-                    threshold_checks.append({
-                        "metric": "Average Latency",
-                        "requirement": f"<= {req_lat:.1f} us",
-                        "actual": f"{avg_lat:.1f} us",
-                        "outcome": "PASS" if ok else "FAIL",
-                    })
-                if thresholds.get("max_p99_latency_us") is not None and p99_lat > 0:
-                    req_p99 = float(thresholds["max_p99_latency_us"])
-                    ok = p99_lat <= req_p99
-                    passed_all = passed_all and ok
-                    threshold_checks.append({
-                        "metric": "P99 Tail Latency",
-                        "requirement": f"<= {req_p99:.1f} us",
-                        "actual": f"{p99_lat:.1f} us",
-                        "outcome": "PASS" if ok else "FAIL",
-                    })
-                if thresholds.get("max_gw_cpu_pct") is not None and peak_gw_cpu is not None:
-                    req_cpu = float(thresholds["max_gw_cpu_pct"])
-                    ok = peak_gw_cpu <= req_cpu
-                    passed_all = passed_all and ok
-                    threshold_checks.append({
-                        "metric": "UniFi Gateway Peak CPU",
-                        "requirement": f"<= {req_cpu:.1f}%",
-                        "actual": f"{peak_gw_cpu:.1f}%",
-                        "outcome": "PASS" if ok else "FAIL",
-                    })
-                verdict = "PASS" if passed_all else "FAIL"
+                    _check("Average RX Throughput", f">= {req_mbps:.2f} Mbps", f"{actual_mbps:.2f} Mbps",
+                           (actual_mbps >= req_mbps) if samples else None)
+                req_loss = _thr("max_loss_pct")
+                if req_loss is not None:
+                    _check("Packet Loss", f"<= {req_loss:.4f}%", f"{overall_drop_pct:.4f}%",
+                           (overall_drop_pct <= req_loss) if total_tx_pkts > 0 else None)
+                req_lat = _thr("max_avg_latency_us")
+                if req_lat is not None:
+                    _check("Average Latency", f"<= {req_lat:.1f} us", f"{avg_lat:.1f} us",
+                           (avg_lat <= req_lat) if avg_lat > 0 else None)
+                req_p99 = _thr("max_p99_latency_us")
+                if req_p99 is not None:
+                    _check("P99 Tail Latency", f"<= {req_p99:.1f} us", f"{p99_lat:.1f} us",
+                           (p99_lat <= req_p99) if p99_lat > 0 else None)
+                req_cpu = _thr("max_gw_cpu_pct")
+                if req_cpu is not None:
+                    _check("UniFi Gateway Peak CPU", f"<= {req_cpu:.1f}%",
+                           f"{peak_gw_cpu:.1f}%" if peak_gw_cpu is not None else "",
+                           (peak_gw_cpu <= req_cpu) if peak_gw_cpu is not None else None)
+                outcomes = [c["outcome"] for c in threshold_checks]
+                if not outcomes:
+                    verdict = "COMPLETED"  # enabled but no usable threshold values: nothing was evaluated
+                elif "FAIL" in outcomes:
+                    verdict = "FAIL"
+                elif "NOT MEASURED" in outcomes:
+                    verdict = "INCONCLUSIVE"
+                else:
+                    verdict = "PASS"
             else:
                 verdict = "COMPLETED"
 
@@ -620,7 +620,7 @@ def finalize_test_run(run_id: int, status: str = "completed") -> Optional[Dict[s
                 "peak_gw_cpu_pct": round(peak_gw_cpu, 1) if peak_gw_cpu is not None else None,
                 "peak_gw_mem_pct": round(peak_gw_mem, 1) if peak_gw_mem is not None else None,
                 "telemetry_source": telemetry_source,
-                "thresholds_configured": bool(thresholds and thresholds.get("enabled")),
+                "thresholds_configured": bool(threshold_checks),
                 "threshold_checks": threshold_checks,
                 "verdict": verdict,
             }
@@ -707,6 +707,9 @@ def delete_test_run(run_id: int) -> bool:
         conn = get_conn()
         try:
             conn.execute("DELETE FROM telemetry_samples WHERE run_id = ?", (run_id,))
+            # Run-tagged UniFi/SNMP samples are exempt from the 7-day prune, so they would otherwise leak forever
+            conn.execute("DELETE FROM unifi_samples WHERE run_id = ?", (run_id,))
+            conn.execute("DELETE FROM snmp_samples WHERE run_id = ?", (run_id,))
             cur = conn.execute("DELETE FROM test_runs WHERE id = ?", (run_id,))
             conn.commit()
             return cur.rowcount > 0

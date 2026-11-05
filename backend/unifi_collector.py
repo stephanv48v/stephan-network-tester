@@ -121,6 +121,11 @@ class UniFiTelemetryCollector:
             "password_enc": existing.get("password_enc", ""),
             "site_manager_key_enc": existing.get("site_manager_key_enc", ""),
         }
+        # Unauthenticated API: if the controller host/port changes, do not silently re-send the stored
+        # API key / password to the new (possibly attacker-controlled) host. Require re-entry.
+        if (updated["host"], updated["port"]) != (existing.get("host", updated["host"]), int(existing.get("port", updated["port"]) or 443)):
+            updated["api_key_enc"] = ""
+            updated["password_enc"] = ""
         if payload.get("api_key") and not str(payload["api_key"]).startswith("••"):
             updated["api_key_enc"] = db.encrypt_secret(str(payload["api_key"]).strip())
         if payload.get("password") and not str(payload["password"]).startswith("••"):
@@ -284,6 +289,8 @@ class UniFiTelemetryCollector:
             if v1_prefix_used and v1_info is not None:
                 return self._poll_and_parse_v1_integration(client, base, v1_prefix_used, v1_info, cfg)
 
+            # Session cookie may have expired: drop it so the next poll re-authenticates
+            self._session_cookies = None
             raise RuntimeError(f"Could not reach UniFi Network API on {base} (check IP, port, or API key)")
 
     def _poll_and_parse_v1_integration(
@@ -531,7 +538,8 @@ class UniFiTelemetryCollector:
                 "num_clients": num_sta,
                 "rx_bps": (_safe_float(d.get("rx_bytes-r")) or 0.0) * 8.0 if d.get("rx_bytes-r") is not None else None,
                 "tx_bps": (_safe_float(d.get("tx_bytes-r")) or 0.0) * 8.0 if d.get("tx_bytes-r") is not None else None,
-                "active_sessions": _safe_int(d.get("num_desktop")) or _safe_int((d.get("stat") or {}).get("gw", {}).get("num_sessions")),
+                # (num_desktop is a desktop-client count, not firewall sessions - do not report it as sessions)
+                "active_sessions": _safe_int(((d.get("stat") or {}).get("gw") or {}).get("num_sessions")),
                 "ports": ports_parsed,
                 "radios": radios_parsed,
             }

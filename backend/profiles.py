@@ -444,6 +444,9 @@ USER_SCALE_PRESETS: List[Dict[str, Any]] = [
     {"id": "efg_5000", "name": "5,000 Users", "users": 5000, "devices": 10000, "target_gbps": 2.50, "recommended_rate_pct": 25.0},
     {"id": "efg_7500", "name": "7,500 Users", "users": 7500, "devices": 15000, "target_gbps": 3.75, "recommended_rate_pct": 37.5},
     {"id": "efg_10000", "name": "10,000 Users — EFG Target", "users": 10000, "devices": 20000, "target_gbps": 5.00, "recommended_rate_pct": 50.0},
+    {"id": "efg_25000", "name": "25,000 Users", "users": 25000, "devices": 50000, "target_gbps": 1.00, "recommended_rate_pct": 10.0},
+    {"id": "efg_50000", "name": "50,000 Users", "users": 50000, "devices": 100000, "target_gbps": 1.00, "recommended_rate_pct": 10.0},
+    {"id": "efg_100000", "name": "100,000 Users — Maximum Scale", "users": 100000, "devices": 200000, "target_gbps": 1.00, "recommended_rate_pct": 10.0},
 ]
 
 EFG_USER_SCENARIOS: List[Dict[str, Any]] = [
@@ -546,6 +549,48 @@ EFG_USER_SCENARIOS: List[Dict[str, Any]] = [
         "description": "Long-duration 33-minute (configurable up to 24h) 10,000-user soak test detecting EFG memory leaks, thermal throttling, state-table exhaustion, and TCP retransmission creep.",
     },
     {
+        "id": "scenario_25000_users",
+        "name": "25,000 Users — Large Campus",
+        "users": 25000,
+        "devices": 50000,
+        "target_gbps": 1.00,
+        "traffic_engine": "trex_astf",
+        "profile_id": "imix",
+        "test_mode": "phased",
+        "ramp_up_sec": 60,
+        "steady_sec": 300,
+        "ramp_down_sec": 30,
+        "description": "25,000 distinct client IPs. Stresses the gateway's NAT/connection table and ARP scale. Target is 1 Gbps to fit the 1GbE test ports — raise it if a 10GbE NIC is fitted.",
+    },
+    {
+        "id": "scenario_50000_users",
+        "name": "50,000 Users — Connection-Table Stress",
+        "users": 50000,
+        "devices": 100000,
+        "target_gbps": 1.00,
+        "traffic_engine": "trex_astf",
+        "profile_id": "imix",
+        "test_mode": "phased",
+        "ramp_up_sec": 90,
+        "steady_sec": 300,
+        "ramp_down_sec": 30,
+        "description": "50,000 distinct client IPs with a slow ramp. Shows where gateway CPU, memory and latency start to bend as the session table fills.",
+    },
+    {
+        "id": "scenario_100000_users",
+        "name": "100,000 Users — Maximum Scale",
+        "users": 100000,
+        "devices": 200000,
+        "target_gbps": 1.00,
+        "traffic_engine": "trex_astf",
+        "profile_id": "imix",
+        "test_mode": "phased",
+        "ramp_up_sec": 120,
+        "steady_sec": 300,
+        "ramp_down_sec": 60,
+        "description": "100,000 distinct client IPs (16.0.0.1 – 16.1.134.160) — the appliance maximum. Finds the gateway's breaking point for user/session scale. Watch gateway CPU and drops closely.",
+    },
+    {
         "id": "scenario_10gbps_linerate",
         "name": "10 Gbps Line-Rate Forwarding Benchmark",
         "users": 10000,
@@ -612,7 +657,8 @@ def calculate_mos_score(lat_avg_us: float, jitter_us: float, drop_pct: float) ->
         return 0.0
     delay_ms = (lat_avg_us / 1000.0) + (jitter_us * 2.0 / 1000.0)
     id_factor = (delay_ms / 40.0) if delay_ms < 160.0 else ((delay_ms - 120.0) / 10.0)
-    ie_eff = 30.0 * (drop_pct / (drop_pct + 10.0)) if drop_pct > 0 else 0.0
+    # G.107 Ie,eff = Ie + (95 - Ie) * Ppl / (Ppl + Bpl); G.711 with PLC: Ie=0, Bpl=25.1 (was 30*P/(P+10), far too lenient)
+    ie_eff = 95.0 * (drop_pct / (drop_pct + 25.1)) if drop_pct > 0 else 0.0
     r_factor = max(0.0, min(93.2, 93.2 - id_factor - ie_eff))
     if r_factor <= 0:
         return 1.0

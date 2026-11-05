@@ -69,6 +69,9 @@ class WSConnectionManager:
 
 ws_manager = WSConnectionManager()
 _bg_tasks: List[asyncio.Task] = []
+# Held for the whole RFC 2544-style sweep (engine.running stays False during it), so concurrent sweeps,
+# manual test starts and scheduled jobs cannot reset/restart the TRex client mid-trial.
+_sweep_lock = asyncio.Lock()
 
 
 def _cron_matches_now(cron_expr: str, now_dt: datetime.datetime) -> bool:
@@ -76,7 +79,7 @@ def _cron_matches_now(cron_expr: str, now_dt: datetime.datetime) -> bool:
     if len(parts) != 5:
         return False
     vals = [now_dt.minute, now_dt.hour, now_dt.day, now_dt.month, (now_dt.weekday() + 1) % 7]
-    for field_str, current_val in zip(parts, vals):
+    for field_idx, (field_str, current_val) in enumerate(zip(parts, vals)):
         if field_str == "*":
             continue
         if field_str.startswith("*/"):
@@ -88,9 +91,21 @@ def _cron_matches_now(cron_expr: str, now_dt: datetime.datetime) -> bool:
                 pass
             return False
         matched = False
+        is_dow = field_idx == 4
         for token in field_str.split(","):
             try:
-                if int(token) == current_val:
+                # Support "a", "a-b" and "a-b/n" tokens (e.g. "1-5" weekdays); cron allows 7 == Sunday
+                rng, _, step_s = token.partition("/")
+                step = int(step_s) if step_s else 1
+                lo_s, _, hi_s = rng.partition("-")
+                lo = int(lo_s)
+                hi = int(hi_s) if hi_s else lo
+                if step <= 0:
+                    continue
+                cands = set(range(lo, hi + 1, step))
+                if is_dow and 7 in cands:
+                    cands.add(0)
+                if current_val in cands:
                     matched = True
                     break
             except Exception:
@@ -127,6 +142,9 @@ async def scheduler_loop() -> None:
                 if run_at_iso:
                     try:
                         target_dt = datetime.datetime.fromisoformat(run_at_iso)
+                        if target_dt.tzinfo is not None:
+                            # e.g. "...Z" from JS toISOString(): convert to naive local time; aware - naive raises TypeError
+                            target_dt = target_dt.astimezone().replace(tzinfo=None)
                         if abs((now_dt - target_dt).total_seconds()) <= 30 and not job.get("last_run_at"):
                             should_trigger = True
                     except Exception:
@@ -137,7 +155,7 @@ async def scheduler_loop() -> None:
                         if (now - last_ran) > 55:
                             should_trigger = True
 
-                if should_trigger and not engine.running:
+                if should_trigger and not engine.running and not _sweep_lock.locked():
                     req = {
                         "name": f"[Scheduled] {job.get('name')}",
                         "profile_id": job.get("profile_id", "imix"),
@@ -285,6 +303,8 @@ async def precheck_test(payload: Dict[str, Any]):
 
 @app.post("/api/test/start")
 async def start_test(payload: Dict[str, Any]):
+    if _sweep_lock.locked():
+        raise HTTPException(status_code=409, detail="A frame-size sweep is currently running; wait for it to finish")
     return await asyncio.to_thread(engine.start_test, payload)
 
 
@@ -296,7 +316,10 @@ async def stop_test(payload: Optional[Dict[str, Any]] = None):
 
 @app.post("/api/test/rate")
 async def update_rate(payload: Dict[str, Any]):
-    rate = float(payload.get("rate_pct", 50.0))
+    try:
+        rate = float(payload.get("rate_pct", 50.0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="rate_pct must be a number")
     return await asyncio.to_thread(engine.update_rate, rate)
 
 
@@ -317,15 +340,33 @@ async def run_rfc2544_sweep(payload: Dict[str, Any]):
     Execute a REAL Cisco TRex STL multi-frame-size sweep (64B, 128B, 256B, 512B, 1024B, 1280B, 1518B, optional 9000B).
     Measures genuine hardware/DPDK TX/RX bps, PPS, packet drops, and PG_ID latency for every frame size.
     """
+    if _sweep_lock.locked():
+        raise HTTPException(status_code=409, detail="A frame-size sweep is already running")
+    async with _sweep_lock:
+        return await _run_rfc2544_sweep_locked(payload)
+
+
+async def _run_rfc2544_sweep_locked(payload: Dict[str, Any]):
+    site_name = str(payload.get("site_name") or "UniFi EFG Benchmark")
+    try:
+        target_gbps = max(0.01, float(payload.get("target_gbps", 1.0)))
+        trial_sec = max(2, min(30, int(payload.get("trial_duration_sec", 3))))
+        include_jumbo = bool(payload.get("include_jumbo", False))
+        frame_sizes = payload.get("frame_sizes") or ([64, 128, 256, 512, 1024, 1280, 1518] + ([9000] if include_jumbo else []))
+        frame_sizes = [max(64, min(9000, int(f))) for f in frame_sizes]
+        sweep_users = int(payload.get("simulated_users", 1000))
+        sweep_devices = int(payload.get("simulated_devices", 2000))
+        sweep_vlan = int(payload.get("vlan_id", 0) or 0)
+        thresholds = payload.get("thresholds") if isinstance(payload.get("thresholds"), dict) else None
+        _ml = thresholds.get("max_loss_pct") if thresholds else None
+        sweep_max_loss = 0.1 if _ml is None else float(_ml)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid sweep parameters (numeric fields / frame_sizes list expected)")
+    if not frame_sizes:
+        raise HTTPException(status_code=400, detail="frame_sizes must not be empty")
+
     if engine.running:
         await asyncio.to_thread(engine.stop_test, "stopped_for_benchmark")
-
-    site_name = str(payload.get("site_name") or "UniFi EFG Benchmark")
-    target_gbps = max(0.01, float(payload.get("target_gbps", 1.0)))
-    trial_sec = max(2, min(30, int(payload.get("trial_duration_sec", 3))))
-    include_jumbo = bool(payload.get("include_jumbo", False))
-    frame_sizes = payload.get("frame_sizes") or ([64, 128, 256, 512, 1024, 1280, 1518] + ([9000] if include_jumbo else []))
-    thresholds = payload.get("thresholds") if isinstance(payload.get("thresholds"), dict) else None
 
     ok_stl = await asyncio.to_thread(engine.ensure_trex_daemon_mode, "STL")
     if not ok_stl or engine.client is None:
@@ -339,8 +380,8 @@ async def run_rfc2544_sweep(payload: Dict[str, Any]):
         "rfc2544_sweep",
         len(frame_sizes) * trial_sec,
         min(100.0, round(target_gbps * 10.0, 2)),
-        int(payload.get("simulated_users", 1000)),
-        int(payload.get("simulated_devices", 2000)),
+        sweep_users,
+        sweep_devices,
         {
             "site_name": site_name,
             "target_gbps": target_gbps,
@@ -358,9 +399,17 @@ async def run_rfc2544_sweep(payload: Dict[str, Any]):
     elapsed_counter = 0
     sweep_status = "interrupted"
 
+    def _stop_trial() -> None:
+        with engine._lock:
+            if engine.client is not None and engine.client_mode == "STL":
+                try:
+                    engine.client.stop(ports=[0, 1])
+                except Exception:
+                    pass
+
     try:
         for fsz in frame_sizes:
-            fsz_int = max(64, min(9000, int(fsz)))
+            fsz_int = fsz
 
             def _start_trial(sz: int) -> None:
                 if engine.client is None or engine.client_mode != "STL" or not engine.trex_connected:
@@ -373,7 +422,7 @@ async def run_rfc2544_sweep(payload: Dict[str, Any]):
                     c.clear_stats(ports=[0, 1])
                     streams = engine._build_trex_stl_streams(
                         PREBUILT_PROFILES["bw_1518b"],
-                        {"override_frame_size": sz, "simulated_users": 1000, "vlan_id": int(payload.get("vlan_id", 0) or 0)},
+                        {"override_frame_size": sz, "simulated_users": 1000, "vlan_id": sweep_vlan},
                         port_idx=0,
                     )
                     c.add_streams(streams, ports=[0])
@@ -414,19 +463,22 @@ async def run_rfc2544_sweep(payload: Dict[str, Any]):
                     "telemetry_source": f"Cisco TRex STL ({fsz_int}B Trial)",
                 }
                 trial_samples.append(sample_obj)
-                await asyncio.to_thread(db.insert_telemetry_sample, run_id, sample_obj)
-
-            def _stop_trial() -> None:
-                with engine._lock:
-                    if engine.client is not None and engine.client_mode == "STL":
-                        try:
-                            engine.client.stop(ports=[0, 1])
-                        except Exception:
-                            pass
+                if len(trial_samples) < trial_sec:
+                    await asyncio.to_thread(db.insert_telemetry_sample, run_id, sample_obj)
 
             await asyncio.to_thread(_stop_trial)
 
+            # Read loss only after TX has stopped and in-flight packets drained: TX/RX counters sampled while
+            # traffic is flowing are not synchronised and report in-flight packets as drops.
             last_s = trial_samples[-1]
+            await asyncio.sleep(0.5)
+            final_m = await asyncio.to_thread(engine._collect_real_trex_metrics)
+            if int(final_m.get("tx_packets") or 0) > 0:
+                for k in ("tx_packets", "rx_packets", "dropped_packets", "drop_pct"):
+                    last_s[k] = final_m[k]
+                last_s["mos_score"] = calculate_mos_score(last_s["lat_avg_us"], last_s["jitter_us"], last_s["drop_pct"])
+            await asyncio.to_thread(db.insert_telemetry_sample, run_id, last_s)
+
             avg_rx_mbps = sum(s["rx_bps"] for s in trial_samples) / len(trial_samples) / 1e6
             avg_tx_mbps = sum(s["tx_bps"] for s in trial_samples) / len(trial_samples) / 1e6
             avg_kpps = sum(s["rx_pps"] for s in trial_samples) / len(trial_samples) / 1e3
@@ -439,10 +491,12 @@ async def run_rfc2544_sweep(payload: Dict[str, Any]):
                 "p99_lat_us": round(last_s["p99_lat_us"], 2),
                 "jitter_us": round(last_s["jitter_us"], 2),
                 "drop_pct": round(last_s["drop_pct"], 4),
-                "status": "RECORDED" if not (thresholds and thresholds.get("enabled")) else ("PASS" if last_s["drop_pct"] <= float(thresholds.get("max_loss_pct", 0.1)) else "FAIL"),
+                "status": "RECORDED" if not (thresholds and thresholds.get("enabled")) else ("PASS" if last_s["drop_pct"] <= sweep_max_loss else "FAIL"),
             })
         sweep_status = "completed"
     finally:
+        if sweep_status != "completed":
+            await asyncio.to_thread(_stop_trial)
         summary = await asyncio.to_thread(db.finalize_test_run, run_id, sweep_status)
     await asyncio.to_thread(
         db.log_audit,
@@ -516,7 +570,9 @@ async def export_live_json():
 @app.get("/api/runs/live/export/pdf")
 async def export_live_pdf(report_type: str = Query("technical"), inline: int = Query(0)):
     rid = await _resolve_live_or_latest_run_id()
-    return await export_run_pdf(rid, report_type=report_type, inline=inline)
+    # Pass title/client explicitly: calling the route function directly would otherwise receive the
+    # Query(None) FieldInfo defaults (not None), which crashes reportlab's PDF title metadata.
+    return await export_run_pdf(rid, report_type=report_type, inline=inline, title=None, client=None)
 
 
 @app.get("/api/runs/{run_id}")
@@ -772,7 +828,8 @@ async def configure_trex(payload: Dict[str, Any]):
     disc = await asyncio.to_thread(discover_interfaces)
     res = await asyncio.to_thread(generate_trex_cfg, disc, mode, port0, port1)
     if restart_service:
-        subprocess.run(["systemctl", "restart", "trex-server.service"], check=False)
+        # Run off the event loop: a TRex daemon restart takes seconds and would freeze telemetry/WebSockets
+        await asyncio.to_thread(subprocess.run, ["systemctl", "restart", "trex-server.service"], check=False, timeout=30)
         await asyncio.sleep(2.0)
         await asyncio.to_thread(engine.try_connect_trex)
     await asyncio.to_thread(db.log_audit, "TRex Engine", "Updated /etc/trex_cfg.yaml", f"Mode={mode}", f"Ports={res.get('ports')}")
@@ -881,8 +938,11 @@ async def diag_neighbors():
 @app.post("/api/diagnostics/iperf3")
 async def diag_iperf3(payload: Dict[str, Any]):
     server_ip = payload.get("server_ip", "127.0.0.1")
-    duration = int(payload.get("duration", 4))
-    parallel = int(payload.get("parallel", 4))
+    try:
+        duration = int(payload.get("duration", 4))
+        parallel = int(payload.get("parallel", 4))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="duration and parallel must be integers")
     reverse = bool(payload.get("reverse", False))
     return await asyncio.to_thread(diag.run_iperf3_test, server_ip, duration, parallel, reverse)
 
@@ -894,7 +954,7 @@ async def diag_pcap(interface: str = Query("enp216s0"), count: int = Query(150))
 
 
 @app.get("/api/system/git-status")
-async def git_status():
+def git_status():  # sync def => FastAPI runs it in the threadpool; blocking subprocess calls no longer stall the event loop
     repo_dir = "/opt/stephan-network-tester"
     try:
         sha = subprocess.run(["git", "-C", repo_dir, "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=4).stdout.strip()
