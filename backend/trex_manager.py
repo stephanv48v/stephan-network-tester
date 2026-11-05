@@ -3,6 +3,8 @@ Cisco TRex STL API Manager & Real-Time Telemetry Engine
 for Stephan Van Vuuren's Network Tester (Dell PowerEdge R640).
 """
 import asyncio
+import builtins
+import json
 import math
 import os
 import random
@@ -12,10 +14,23 @@ import subprocess
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import psutil
+import zmq
+
+# Python 3.14 compatibility shim for Cisco TRex bundled six.moves
+_moves = types.ModuleType("six.moves")
+_moves.range = builtins.range
+_moves.zip = builtins.zip
+_moves.map = builtins.map
+_moves.filter = builtins.filter
+_moves.input = builtins.input
+sys.modules.setdefault("six.moves", _moves)
+sys.modules.setdefault("scapy.modules.six.moves", _moves)
+sys.modules.setdefault("trex.common.services.trex_service_int", types.ModuleType("trex_service_int"))
 
 # Add Cisco TRex Python Automation API path
 TREX_API_PATHS = [
@@ -129,30 +144,59 @@ class TRexEngineManager:
         self.latest_telemetry: Dict[str, Any] = {}
 
     def try_connect_trex(self) -> bool:
-        if not TREX_STL_AVAILABLE:
-            return False
         with self._lock:
             if self.client is not None and self.trex_connected:
                 try:
-                    if self.client.is_connected():
+                    if hasattr(self.client, "is_connected") and self.client.is_connected():
                         return True
                 except Exception:
-                    self.trex_connected = False
+                    pass
 
+            # 1. Try STLClient if available
+            if TREX_STL_AVAILABLE:
+                try:
+                    c = STLClient(server="127.0.0.1", sync_port=4501, async_port=4500, verbose_level="error")
+                    c.connect()
+                    c.acquire(force=True)
+                    self.client = c
+                    self.trex_connected = True
+                    ver_info = c.get_server_version() or {}
+                    if isinstance(ver_info, dict) and ver_info.get("version"):
+                        self.trex_server_version = f"Cisco TRex {ver_info.get('version')} ({ver_info.get('mode', 'STL')} DPDK/ZMQ)"
+                    return True
+                except Exception:
+                    pass
+
+            # 2. Direct ZMQ JSON-RPC connection to t-rex-64 on tcp://127.0.0.1:4501
             try:
-                c = STLClient(server="127.0.0.1", sync_port=4501, async_port=4500, verbose_level="error")
-                c.connect()
-                c.acquire(force=True)
-                self.client = c
-                self.trex_connected = True
-                ver_info = c.get_server_version() or {}
-                if isinstance(ver_info, dict) and ver_info.get("version"):
-                    self.trex_server_version = f"Cisco TRex {ver_info.get('version')}"
-                return True
+                ctx = zmq.Context.instance()
+                sock = ctx.socket(zmq.REQ)
+                sock.setsockopt(zmq.RCVTIMEO, 800)
+                sock.setsockopt(zmq.SNDTIMEO, 800)
+                sock.setsockopt(zmq.LINGER, 0)
+                sock.connect("tcp://127.0.0.1:4501")
+                req_msg = json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "api_sync_v2",
+                    "params": {"api_h": "", "major": 4, "minor": 0, "name": "STL"},
+                })
+                sock.send_string(req_msg)
+                _ = sock.recv_string()
+
+                sock.send_string(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "get_version", "params": {}}))
+                ver_raw = json.loads(sock.recv_string())
+                res = ver_raw.get("result", {})
+                sock.close()
+                if isinstance(res, dict) and res.get("version"):
+                    self.trex_connected = True
+                    self.trex_server_version = f"Cisco TRex {res.get('version')} ({res.get('mode', 'STL')} ZMQ RPC)"
+                    return True
             except Exception:
                 self.trex_connected = False
                 self.client = None
                 return False
+        return False
 
     def _build_trex_streams(self, profile_id: str, cfg: Dict[str, Any]) -> List[Any]:
         """Build real Cisco TRex STLStream list with Field Engine user/device simulation & VLAN/DSCP."""
