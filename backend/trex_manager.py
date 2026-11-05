@@ -380,16 +380,16 @@ class TRexEngineManager:
 
         zmq_ver = _zmq_query_server_mode(timeout_ms=600)
         checks.append({
-            "check": "Cisco TRex Engine ZMQ RPC",
+            "check": "Traffic engine (TRex)",
             "status": "ok" if zmq_ver else "error",
-            "detail": f"Online ({zmq_ver.get('version')} — {zmq_ver.get('mode')} mode)" if zmq_ver else "Unreachable on 127.0.0.1:4501",
+            "detail": f"Running ({zmq_ver.get('version')}, {zmq_ver.get('mode')} mode)" if zmq_ver else "Not running — lab tests can't start. The internet test still works. See System & Settings → TRex Engine.",
         })
 
         mgmt_if = hw.get("management_interface") or "enp216s0"
         checks.append({
-            "check": "Management Interface Safety",
+            "check": "Management port",
             "status": "ok",
-            "detail": f"{mgmt_if} protected from DPDK unbinding; SSH/Web UI preserved.",
+            "detail": f"{mgmt_if} is never used for lab traffic, so this page and SSH stay reachable.",
         })
 
         test_nics = [i for i in hw.get("interfaces", []) if not i.get("is_management")]
@@ -397,24 +397,24 @@ class TRexEngineManager:
         if len(up_test_nics) >= 2:
             max_test_gbps = min((i.get("speed_mbps") or 1000) for i in up_test_nics[:2]) / 1000.0
             checks.append({
-                "check": "Physical Test Interfaces (LAN <-> WAN)",
+                "check": "Test ports cabled to the gateway",
                 "status": "ok" if target_gbps <= max_test_gbps else "warning",
-                "detail": f"{up_test_nics[0]['ifname']} & {up_test_nics[1]['ifname']} UP ({max_test_gbps:.1f} Gbps link ceiling).",
+                "detail": f"{up_test_nics[0]['ifname']} and {up_test_nics[1]['ifname']} are connected (max {max_test_gbps:.1f} Gbps).",
             })
             if target_gbps > max_test_gbps:
                 warnings_list.append(
-                    f"Configured target ({target_gbps:.2f} Gbps) exceeds physical link speed ({max_test_gbps:.2f} Gbps) of active test interfaces."
+                    f"You asked for {target_gbps:.2f} Gbps but the test ports can only do {max_test_gbps:.2f} Gbps — results will top out there."
                 )
         else:
             checks.append({
-                "check": "Physical Test Interfaces (LAN <-> WAN)",
+                "check": "Test ports cabled to the gateway",
                 "status": "warning",
-                "detail": "Physical test ports eno1-eno4 have no carrier; TRex is bound to internal veth_trex0/veth_trex1 loopback pair.",
+                "detail": "No — eno1–eno4 have no cable, so lab traffic stays inside this server.",
             })
             if engine_type in ("trex_astf", "trex_stl"):
                 warnings_list.append(
-                    "TRex is currently running on internal veth_trex0 <-> veth_trex1 virtual pair because eno1-eno4 are unplugged. "
-                    "Traffic will validate R640 TRex generation internally but will NOT traverse the external UniFi EFG until physical LAN & WAN test ports are cabled."
+                    "This test will NOT go through your gateway: the test ports are unplugged, so traffic loops inside this server. "
+                    "It shows what the server can generate, not what the firewall can handle. Cable eno1 to an EFG LAN port and eno2 to a second EFG port to test the gateway."
                 )
 
         if target_gbps > 1.0 and not topo.get("can_achieve_10gbps_lan_to_wan"):
@@ -425,9 +425,9 @@ class TRexEngineManager:
 
         c_start, c_end, ip_cnt = compute_client_ip_range(req.get("src_ip_start", "16.0.0.1"), users)
         checks.append({
-            "check": "Emulated User IP Pool",
+            "check": "User IP addresses",
             "status": "ok" if users <= MAX_SIMULATED_USERS else "warning",
-            "detail": f"{ip_cnt:,} distinct client IPs ({c_start} - {c_end}) mapped to Port 0."
+            "detail": f"{ip_cnt:,} users, each with its own address ({c_start} – {c_end})."
             + (f" Requested {users:,} users; capped at {MAX_SIMULATED_USERS:,}." if users > MAX_SIMULATED_USERS else ""),
         })
         if ip_cnt > 20000 and engine_type in ("trex_astf", "hybrid"):
@@ -438,9 +438,9 @@ class TRexEngineManager:
 
         unifi_ok = bool(unifi_collector.latest_snapshot.get("connected"))
         checks.append({
-            "check": "UniFi Infrastructure Telemetry",
+            "check": "UniFi gateway monitoring",
             "status": "ok" if unifi_ok else "info",
-            "detail": "Connected to UniFi API" if unifi_ok else "Not connected — TRex test will run normally; configure UniFi API in Administration -> API Integrations for correlated EFG CPU/RAM.",
+            "detail": "Connected — gateway CPU and memory will be recorded with the test." if unifi_ok else "Not connected — the test runs fine, but gateway CPU/memory won't be recorded. Connect it under System & Settings → Integrations.",
         })
 
         return {

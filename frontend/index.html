@@ -256,6 +256,10 @@
                 <button class="btn btn-danger btn-sm" onclick="App.stopActiveTest('completed')">&#9632; Stop Test</button>
               </div>
             </div>
+            <div id="lmLiveBlock" style="display:none;">
+              <div class="lm-progress"><div class="lm-progress-fill" id="lmProgress"></div></div>
+              <div class="scoreboard" id="lmScoreboard"></div>
+            </div>
           </div>
 
           <div class="subtab-bar" id="lmTabBar">
@@ -278,6 +282,7 @@
         </section>
 
         <!-- Pages rendered by pages_studio.js / pages_infra.js -->
+        <section class="page-section" id="page-test-picker"></section>
         <section class="page-section" id="page-quick-test"></section>
         <section class="page-section" id="page-traffic-mix-builder"></section>
         <section class="page-section" id="page-application-simulation"></section>

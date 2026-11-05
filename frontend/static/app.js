@@ -20,7 +20,7 @@ const WORKLOAD_COLORS = {
 // The sidebar has 6 sections. Each section groups related pages as tabs.
 const SECTIONS = {
   home: { title: 'Home', sub: 'Status at a glance and one-click tests', routes: ['dashboard'] },
-  run: { title: 'Run a Test', sub: 'Pick a test type, set it up and start it', routes: ['quick-test', 'application-simulation', 'traffic-mix-builder', 'stress-soak', 'rfc2544-benchmark', 'traffic-profiles', 'test-scheduler'] },
+  run: { title: 'Run a Test', sub: 'Pick what you want to find out, then start the test', routes: ['test-picker', 'quick-test', 'stress-soak', 'rfc2544-benchmark', 'traffic-mix-builder', 'test-scheduler'], hidden: ['application-simulation', 'traffic-profiles'] },
   live: { title: 'Live View', sub: 'Watch the running test in real time', routes: ['live-monitoring'] },
   results: { title: 'Results & Reports', sub: 'Past tests, side-by-side comparison and PDF reports', routes: ['test-history', 'compare-tests', 'trends', 'reports-exports'] },
   network: { title: 'My Network', sub: 'UniFi devices, topology and server ports', routes: ['unifi-monitoring', 'network-topology', 'nics-ports'] },
@@ -31,12 +31,13 @@ const SECTIONS = {
 const ROUTE_LABELS = {
   'dashboard': 'Home',
   'live-monitoring': 'Live View',
-  'quick-test': 'Custom Test',
-  'application-simulation': 'App Simulation',
-  'traffic-mix-builder': 'Traffic Mix',
-  'stress-soak': 'Stress & Soak',
-  'rfc2544-benchmark': 'Benchmark (RFC 2544)',
-  'traffic-profiles': 'Saved Profiles',
+  'test-picker': 'Choose a test',
+  'quick-test': 'Custom test',
+  'application-simulation': 'App simulation',
+  'traffic-mix-builder': 'Traffic mix',
+  'stress-soak': 'Load & breaking point',
+  'rfc2544-benchmark': 'Speed benchmark',
+  'traffic-profiles': 'Saved profiles',
   'test-scheduler': 'Schedule',
   'test-history': 'History',
   'compare-tests': 'Compare (before/after)',
@@ -53,7 +54,7 @@ const ROUTE_LABELS = {
   'audit-logs': 'Audit Log',
 };
 
-const sectionForRoute = (route) => Object.keys(SECTIONS).find((k) => SECTIONS[k].routes.includes(route));
+const sectionForRoute = (route) => Object.keys(SECTIONS).find((k) => SECTIONS[k].routes.includes(route) || (SECTIONS[k].hidden || []).includes(route));
 
 // One-click tests shown on the Home page
 const HOME_PRESETS = [
@@ -84,10 +85,10 @@ const HOME_PRESETS = [
     payload: { name: 'Voice quality under load', profile_id: 'voice_under_load', traffic_engine: 'trex_stl', test_mode: 'timed', duration_sec: 60, steady_sec: 60, target_gbps: 0.95, simulated_users: 500, simulated_devices: 1000 },
   },
   {
-    id: 'breaking',
-    title: 'Find the breaking point',
-    desc: 'Adds users step by step until the gateway struggles.',
-    route: 'stress-soak',
+    id: 'breakit',
+    title: 'Test my network until it breaks',
+    desc: 'One click: adds users and bandwidth until quality drops, then a detailed report. About 15–25 min.',
+    action: 'runBreakIt',
   },
   {
     id: 'bench',
@@ -190,6 +191,64 @@ const App = {
     const el = document.getElementById(id);
     if (!el || el.value === '') return fallback;
     return this.clampUsers(el.value);
+  },
+
+  // ---- Plain-English quality ratings --------------------------------------
+  // Returns { label, cls } for a measured value. Limits are typical enterprise/voice targets.
+  rate(metric, v) {
+    if (v === null || v === undefined || Number.isNaN(Number(v))) return null;
+    const n = Number(v);
+    const scale = {
+      latency_ms: [[10, 'Excellent'], [50, 'Good'], [150, 'Fair']],    // ITU-T G.114: keep voice under 150 ms
+      jitter_ms: [[2, 'Excellent'], [10, 'Good'], [30, 'Fair']],
+      loss_pct: [[0.0001, 'Excellent'], [0.1, 'Good'], [1, 'Fair']],
+    }[metric];
+    if (metric === 'mos') {
+      if (n <= 0) return null;
+      if (n >= 4.3) return { label: 'Excellent', cls: 'badge-success' };
+      if (n >= 4.0) return { label: 'Good', cls: 'badge-success' };
+      if (n >= 3.6) return { label: 'Fair', cls: 'badge-warning' };
+      return { label: 'Poor', cls: 'badge-critical' };
+    }
+    if (!scale) return null;
+    for (const [limit, label] of scale) {
+      if (n <= limit) return { label, cls: label === 'Fair' ? 'badge-warning' : 'badge-success' };
+    }
+    return { label: 'Poor', cls: 'badge-critical' };
+  },
+
+  rateBadge(metric, v) {
+    const r = this.rate(metric, v);
+    return r ? `<span class="badge ${r.cls} rate-badge">${r.label}</span>` : '';
+  },
+
+  // One-sentence verdict for a finished run, in plain words
+  plainSummary(run) {
+    const s = run.summary || {};
+    if (!s.sample_count) return 'No measurements were recorded for this test.';
+    const parts = [];
+    parts.push(`Delivered ${this.fmtBps(s.avg_rx_bps)} on average (peak ${this.fmtBps(s.max_rx_bps)})`);
+    const loss = Number(s.drop_pct || 0);
+    parts.push(loss === 0 ? 'with no packet loss' : `with ${loss.toFixed(3)}% packet loss (${(this.rate('loss_pct', loss) || {}).label || ''})`.trim());
+    const lat = Number(s.lat_avg_us || 0) / 1000;
+    if (lat > 0) parts.push(`latency ${lat < 1 ? lat.toFixed(2) : lat.toFixed(1)} ms (${this.rate('latency_ms', lat).label.toLowerCase()})`);
+    if (Number(s.mos_avg) > 0) parts.push(`estimated call quality ${Number(s.mos_avg).toFixed(2)}/5 (${this.rate('mos', s.mos_avg).label.toLowerCase()})`);
+    if (Number(s.peak_active_flows) > 0) parts.push(`${Number(s.peak_active_flows).toLocaleString()} connections open at the peak`);
+    return `${parts.join(', ')}.`;
+  },
+
+  // Where does test traffic actually go right now?
+  trafficPath(f, engine) {
+    const eng = engine || (f && f.traffic_engine);
+    if (eng === 'internet_wan') return { cls: 'path-real', text: 'Through your gateway to the internet', tip: 'Real downloads, DNS and pings leave via the management port and your gateway.' };
+    const mode = ((f && f.topology_assessment) || {}).active_mode_code;
+    if (mode === 'physical_lan_wan') return { cls: 'path-real', text: 'Through your gateway (test ports cabled)', tip: 'TRex sends traffic out one test port and receives it on the other, through the gateway.' };
+    return { cls: 'path-internal', text: 'Inside this server only — not through your gateway', tip: 'Test ports eno1–eno4 have no cable, so TRex uses an internal loopback. Results show what the server can generate, not what your firewall can handle. Cable eno1/eno2 to the gateway to test it.' };
+  },
+
+  pathBadge(f, engine) {
+    const p = this.trafficPath(f, engine);
+    return `<span class="path-badge ${p.cls}" title="${this.esc(p.tip)}">${p.cls === 'path-real' ? '&#9679;' : '&#9888;'} ${p.text}</span>`;
   },
 
   esc(s) {
@@ -356,7 +415,9 @@ const App = {
   populateDashQuickTest() {
     const list = document.getElementById('homePresetList');
     if (list) {
-      list.innerHTML = HOME_PRESETS.map((p) => `
+      // The one-click breaking-point test goes first
+      const ordered = [...HOME_PRESETS].sort((a, b) => (b.id === 'breakit') - (a.id === 'breakit'));
+      list.innerHTML = ordered.map((p) => `
         <button class="preset-btn" onclick="App.runPreset('${p.id}')">
           <span class="preset-title">${p.title}</span>
           <span class="preset-desc">${p.desc}</span>
@@ -373,6 +434,7 @@ const App = {
     const p = HOME_PRESETS.find((x) => x.id === id);
     if (!p) return;
     if (p.route) return this.navigate(p.route);
+    if (p.action) return this[p.action]();
     if (this.latest && this.latest.running) {
       this.toast('A test is already running. Stop it first.', 'error');
       return this.navigate('live-monitoring');
@@ -391,6 +453,42 @@ const App = {
       await this.startTestRequest(payload);
       this.navigate('live-monitoring');
     } catch (_) {}
+  },
+
+  // ---- One-click "test my network until it breaks" -------------------------
+  async runBreakIt() {
+    const f = this.latest || {};
+    if (f.running || (f.capacity || {}).running) {
+      this.toast('A test is already running. Stop it first.', 'error');
+      return;
+    }
+    const path = this.trafficPath(f, 'trex_astf');
+    const msg = [
+      'Test my network until it breaks?',
+      '',
+      '• Starts at 10,000 users and adds 10,000 per step (up to 100,000).',
+      '• Bandwidth grows with the users (20 kbps each: 0.2 Gbps at 10K, 2 Gbps at 100K).',
+      '• Stops as soon as packet loss goes over 0.5%, latency over 50 ms, or less than 95% of traffic gets through — then narrows down the exact limit.',
+      '• Takes about 15–25 minutes. You get a detailed report at the end.',
+      path.cls === 'path-internal' ? '\nNote: the test ports are not cabled, so this will find the limit of the test server, not your gateway.' : '',
+    ].join('\n');
+    if (!confirm(msg)) return;
+    try {
+      await this.api('/api/capacity/start', {
+        method: 'POST',
+        body: JSON.stringify({
+          start_users: 10000, step_users: 10000, max_users: 100000, step_sec: 45, per_user_kbps: 20,
+          max_loss_pct: 0.5, max_latency_ms: 50, min_rx_ratio: 0.95, refine_steps: 2, label: 'One-click breaking-point test',
+        }),
+      });
+      this.toast('Started. Watch the progress here on Home or in Live View.', 'success');
+    } catch (e) {
+      this.toast(`Could not start: ${e.message}`, 'error');
+    }
+  },
+
+  openBreakItReport(id) {
+    window.open(`/api/capacity/report.pdf${id ? `?id=${encodeURIComponent(id)}` : ''}`, '_blank');
   },
 
   connectWebSocket() {
@@ -565,7 +663,7 @@ const App = {
   initDashboardCharts() {
     const tpEl = document.getElementById('dashThroughputChart');
     if (tpEl && window.echarts) {
-      this.charts.dashTp = echarts.init(tpEl);
+      this.charts.dashTp = this.trackHover(echarts.init(tpEl));
       this.charts.dashTp.setOption({
         animation: false,
         grid: { top: 28, right: 16, bottom: 26, left: 48 },
@@ -581,7 +679,7 @@ const App = {
     }
     for (const [key, id] of [['dashLat', 'dashLatChart'], ['dashFlow', 'dashFlowChart'], ['dashLoad', 'dashLoadChart'], ['dashRecent', 'dashRecentChart']]) {
       const el = document.getElementById(id);
-      if (el && window.echarts) this.charts[key] = echarts.init(el);
+      if (el && window.echarts) this.charts[key] = this.trackHover(echarts.init(el));
     }
   },
 
@@ -628,7 +726,7 @@ const App = {
     const line = (name, data, color, extra = {}) => ({ name, type: 'line', smooth: true, showSymbol: false, connectNulls: true, lineStyle: { width: 1.8, color }, itemStyle: { color }, data, ...extra });
 
     // Latency & jitter (ms when large, μs otherwise)
-    if (this.charts.dashLat) {
+    if (this.charts.dashLat && !this.charts.dashLat.__hover) {
       const maxLat = Math.max(0, ...h.latAvg, ...h.latP99);
       const ms = maxLat >= 2000;
       const k = ms ? 1 / 1000 : 1;
@@ -647,7 +745,7 @@ const App = {
     }
 
     // Connections: active flows + established sessions, new connections/sec on the right
-    if (this.charts.dashFlow) {
+    if (this.charts.dashFlow && !this.charts.dashFlow.__hover) {
       this.charts.dashFlow.setOption({
         ...this.miniChartBase([{ name: 'flows' }, { name: '/s' }], h.labels),
         series: [
@@ -660,7 +758,7 @@ const App = {
     }
 
     // Server CPU % (+ gateway CPU when UniFi is connected) and CPU temperature on the right
-    if (this.charts.dashLoad) {
+    if (this.charts.dashLoad && !this.charts.dashLoad.__hover) {
       const hg = live;
       const hasGw = hg.unifiCpu.some((v) => v !== null && v !== undefined);
       const hasTemp = hg.cpuTemp.some((v) => v !== null && v !== undefined);
@@ -732,16 +830,26 @@ const App = {
     const heroTitle = document.getElementById('homeHeroTitle');
     const heroSub = document.getElementById('homeHeroSub');
     const heroAct = document.getElementById('homeHeroActions');
-    const runningKey = f.running ? `run-${f.run_id || f.test_name}` : (f.trex_connected ? 'idle-ok' : 'idle-off');
-    if (f.running) {
+    const cap = f.capacity || {};
+    const capDone = !cap.running && ['limit_found', 'no_limit_found'].includes(cap.outcome) && cap.ended_at && (Date.now() / 1000 - cap.ended_at) < 7 * 86400;
+    const runningKey = cap.running ? `cap-${cap.id}` : f.running ? `run-${f.run_id || f.test_name}` : `${f.trex_connected ? 'idle-ok' : 'idle-off'}-${capDone ? cap.id : ''}`;
+    if (cap.running) {
+      hero.className = 'hero-card running';
+      heroTitle.textContent = 'Testing your network until it breaks…';
+      const users = cap.current_users ? `${Number(cap.current_users).toLocaleString()} users` : 'starting';
+      heroSub.innerHTML = `Step ${cap.current_step || 1} of up to ${cap.plan_len || '?'} — ${users}${cap.max_good_users ? ` · handled ${Number(cap.max_good_users).toLocaleString()} cleanly so far` : ''}. It stops by itself when quality drops, then builds the report.<div style="margin-top:6px;">${this.pathBadge(f, 'trex_astf')}</div>`;
+    } else if (f.running) {
       hero.className = 'hero-card running';
       heroTitle.textContent = `Running: ${f.test_name || 'test'}`;
       const remaining = f.duration_sec ? ` of ${this.fmtDurationClock(f.duration_sec)}` : '';
-      heroSub.textContent = `${(f.phase_name || 'steady').replace(/_/g, ' ')} • ${this.fmtDurationClock(f.elapsed_sec)}${remaining} • ${Number(f.simulated_users || 0).toLocaleString()} users`;
+      heroSub.innerHTML = `${this.esc((f.phase_name || 'steady').replace(/_/g, ' '))} • ${this.fmtDurationClock(f.elapsed_sec)}${remaining} • ${Number(f.simulated_users || 0).toLocaleString()} users<div style="margin-top:6px;">${this.pathBadge(f)}</div>`;
     } else if (f.trex_connected) {
       hero.className = 'hero-card idle';
       heroTitle.textContent = 'Ready to test';
-      heroSub.innerHTML = 'Pick a one-click test below, or build your own under <strong>Run a Test</strong>.';
+      heroSub.innerHTML = (capDone
+        ? `<strong>Last breaking-point test:</strong> ${this.esc(cap.message || '')} `
+        : 'Pick a one-click test below, or choose one under <strong>Run a Test</strong>. ')
+        + `<div style="margin-top:6px;">Lab tests right now: ${this.pathBadge(f, 'trex_astf')}</div>`;
     } else {
       hero.className = 'hero-card warn';
       heroTitle.textContent = 'TRex engine is offline';
@@ -749,11 +857,12 @@ const App = {
     }
     if (this._heroKey !== runningKey) {
       this._heroKey = runningKey;
-      heroAct.innerHTML = f.running
+      heroAct.innerHTML = (cap.running || f.running)
         ? `<button class="btn btn-outline" onclick="App.navigate('live-monitoring')">Open Live View</button>
            <button class="btn btn-danger" onclick="App.stopActiveTest('completed')">&#9632; Stop</button>`
         : (f.trex_connected
-          ? `<button class="btn btn-primary" onclick="App.runPreset('efg10k')">&#9654; Run load test</button>`
+          ? `${capDone ? `<button class="btn btn-outline" onclick="App.openBreakItReport(${Number(cap.id) || ''})">Open report</button>` : ''}
+             <button class="btn btn-primary btn-breakit" onclick="App.runBreakIt()">&#9889; Test my network until it breaks</button>`
           : `<button class="btn btn-outline" onclick="App.navigate('trex-engine')">Check TRex engine</button>`);
     }
 
@@ -772,13 +881,13 @@ const App = {
     document.getElementById('kpiLatVal').textContent = lat.val;
     document.getElementById('kpiLatUnit').textContent = lat.unit;
     const jit = this.fmtLatency(f.jitter_us);
-    document.getElementById('kpiLatFoot').textContent = f.lat_avg_us
-      ? `Jitter ${jit.val} ${jit.unit}${f.mos_score ? ` • call quality (MOS) ${Number(f.mos_score).toFixed(2)}` : ''}`
+    document.getElementById('kpiLatFoot').innerHTML = f.lat_avg_us
+      ? `${this.rateBadge('latency_ms', Number(f.lat_avg_us) / 1000)} Jitter ${jit.val} ${jit.unit}${f.mos_score ? ` • call quality ${Number(f.mos_score).toFixed(2)}/5` : ''}`
       : 'Measured during a test';
 
     const loss = Number(f.drop_pct || 0);
     document.getElementById('kpiLossVal').textContent = loss.toFixed(3);
-    document.getElementById('kpiLossFoot').textContent = `${Number(f.dropped_packets || 0).toLocaleString()} packets dropped`;
+    document.getElementById('kpiLossFoot').innerHTML = `${f.running ? this.rateBadge('loss_pct', loss) : ''} ${Number(f.dropped_packets || 0).toLocaleString()} packets dropped`;
 
     document.getElementById('kpiUsersVal').textContent = f.running ? Number(f.simulated_users || 0).toLocaleString() : '0';
     document.getElementById('kpiFlowsFoot').textContent = f.running
@@ -786,7 +895,7 @@ const App = {
       : 'Simulated users during a test';
 
     // --- Throughput chart (auto-scale Mbps vs Gbps) ---
-    if (this.charts.dashTp) {
+    if (this.charts.dashTp && !this.charts.dashTp.__hover) {
       const maxG = Math.max(...this.history.txGbps, ...this.history.rxGbps, 0);
       const useMbps = maxG < 0.8;
       const unit = useMbps ? 'Mbps' : 'Gbps';
@@ -920,10 +1029,20 @@ const App = {
   // =========================================================================
   // LIVE MONITORING (5 TABS)
   // =========================================================================
+  // Pause live redraws while the mouse is over a chart; otherwise the tooltip vanishes on every update
+  trackHover(ch) {
+    if (!ch || ch.__hoverTracked) return ch;
+    ch.__hoverTracked = true;
+    const zr = ch.getZr();
+    zr.on('mousemove', () => { ch.__hover = true; });
+    zr.on('globalout', () => { ch.__hover = false; });
+    return ch;
+  },
+
   ensureLiveMonChart() {
     const el = document.getElementById('liveMonMainChart');
     if (el && !this.charts.liveMon && window.echarts) {
-      this.charts.liveMon = echarts.init(el);
+      this.charts.liveMon = this.trackHover(echarts.init(el));
     } else if (this.charts.liveMon) {
       setTimeout(() => this.charts.liveMon.resize(), 50);
     }
@@ -945,17 +1064,42 @@ const App = {
     document.getElementById('lmHeaderTitle').textContent = f.running
       ? `${f.test_name || 'Test'} — ${(f.phase_name || 'steady').replace(/_/g, ' ')}`
       : 'No test running';
-    document.getElementById('lmHeaderSub').textContent = f.running
-      ? `${this.fmtDurationClock(f.elapsed_sec)} elapsed • ${Number(f.simulated_users || 0).toLocaleString()} users • ${Number(f.emulated_client_ips || 0).toLocaleString()} client IPs • source: ${f.telemetry_source || f.traffic_engine || '—'}`
-      : 'Start a test from Home or Run a Test. The last results stay on the chart below.';
+    const remain = f.running && f.duration_sec ? Math.max(0, f.duration_sec - (f.elapsed_sec || 0)) : null;
+    document.getElementById('lmHeaderSub').innerHTML = f.running
+      ? `${this.fmtDurationClock(f.elapsed_sec)} elapsed${remain !== null ? ` • ${this.fmtDurationClock(remain)} left` : ''} • ${Number(f.simulated_users || 0).toLocaleString()} users <span style="margin-left:8px;">${this.pathBadge(f)}</span>`
+      : `Start a test from <a href="javascript:void(0)" onclick="App.navigate('dashboard')">Home</a> or <a href="javascript:void(0)" onclick="App.navigate('test-picker')">Run a Test</a>. The chart keeps the last few minutes of data.`;
     const ctrls = document.getElementById('lmControls');
     if (ctrls) ctrls.style.display = f.running ? 'flex' : 'none';
 
+    // Big live numbers + progress for the running test
+    const liveBlock = document.getElementById('lmLiveBlock');
+    if (liveBlock) {
+      liveBlock.style.display = f.running ? '' : 'none';
+      if (f.running) {
+        const pct = f.duration_sec ? Math.min(100, (Number(f.elapsed_sec || 0) / f.duration_sec) * 100) : 0;
+        document.getElementById('lmProgress').style.width = `${pct.toFixed(1)}%`;
+        const tx = this.fmtBpsParts(f.tx_bps || 0);
+        const rx = this.fmtBpsParts(f.rx_bps || 0);
+        const lat = this.fmtLatency(f.lat_avg_us);
+        const jit = this.fmtLatency(f.jitter_us);
+        const delivered = f.tx_bps > 0 ? (Number(f.rx_bps || 0) / Number(f.tx_bps)) * 100 : null;
+        const big = (label, val, unit, sub) => `<div class="score"><div class="score-label">${label}</div><div class="score-val">${val}<span class="score-unit">${unit}</span></div><div class="score-sub">${sub || ''}</div></div>`;
+        document.getElementById('lmScoreboard').innerHTML = [
+          big('Sending', tx.val, tx.unit, f.target_bps ? `target ${this.fmtBps(f.target_bps)}` : ''),
+          big('Receiving', rx.val, rx.unit, delivered !== null ? `${Math.min(100, delivered).toFixed(1)}% delivered` : ''),
+          big('Latency', lat.val, lat.unit, f.lat_avg_us ? this.rateBadge('latency_ms', Number(f.lat_avg_us) / 1000) : ''),
+          big('Jitter', jit.val, jit.unit, f.mos_score ? `call quality ${Number(f.mos_score).toFixed(2)}/5` : (f.jitter_us ? this.rateBadge('jitter_ms', Number(f.jitter_us) / 1000) : '')),
+          big('Packet loss', Number(f.drop_pct || 0).toFixed(3), '%', this.rateBadge('loss_pct', f.drop_pct || 0)),
+          big('Open connections', Number(f.active_flows || 0).toLocaleString(), '', `${Number(f.cps || 0).toFixed(0)} new/s · ${Number(f.simulated_users || 0).toLocaleString()} users`),
+        ].join('');
+      }
+    }
+
     const ch = this.charts.liveMon;
     const titleEl = document.getElementById('lmChartTitle');
-    if (ch) {
+    if (ch && !ch.__hover) {
       if (this.liveMonTab === 'performance') {
-        titleEl.textContent = 'Real-Time Throughput (TX vs RX vs Target)';
+        titleEl.textContent = 'Speed: sent vs received vs target';
         const useMbps = Math.max(...h.txGbps, 0) < 0.8 && (f.tx_bps || 0) > 0;
         const unit = useMbps ? 'Mbps' : 'Gbps';
         const mult = useMbps ? 1000 : 1;
@@ -973,7 +1117,7 @@ const App = {
           ],
         }, true);
       } else if (this.liveMonTab === 'flows') {
-        titleEl.textContent = 'Stateful Concurrency: Active L4 Flows vs Established TCP Sessions vs CPS';
+        titleEl.textContent = 'Connections: open now, established, and new per second';
         ch.setOption({
           animation: false,
           tooltip: { trigger: 'axis' },
@@ -991,7 +1135,7 @@ const App = {
           ],
         }, true);
       } else if (this.liveMonTab === 'latency') {
-        titleEl.textContent = 'End-to-End Forwarding Latency (Avg, P95, P99) & Jitter (μs)';
+        titleEl.textContent = 'Delay (latency) and jitter — lower is better';
         ch.setOption({
           animation: false,
           tooltip: { trigger: 'axis' },
@@ -1007,7 +1151,7 @@ const App = {
           ],
         }, true);
       } else if (this.liveMonTab === 'errors') {
-        titleEl.textContent = 'Counter-Derived Dropped Packets & TCP Retransmissions';
+        titleEl.textContent = 'Errors: lost packets and TCP retransmissions';
         ch.setOption({
           animation: false,
           tooltip: { trigger: 'axis' },
@@ -1021,7 +1165,7 @@ const App = {
           ],
         }, true);
       } else if (this.liveMonTab === 'correlation') {
-        titleEl.textContent = 'Synchronized TRex Load (Gbps) vs UniFi EFG / System CPU (%)';
+        titleEl.textContent = 'Test load vs gateway CPU (or server CPU if UniFi is not connected)';
         const hasUnifiCpu = h.unifiCpu.some((v) => v !== null);
         ch.setOption({
           animation: false,
@@ -1046,16 +1190,30 @@ const App = {
     // Render 8 distinct non-conflated metric cards below chart
     const grid = document.getElementById('lmMetricsGrid');
     if (grid) {
-      grid.innerHTML = `
-        <div class="card"><div class="card-subtitle">Simulated Users</div><div class="kpi-value">${Number(f.simulated_users || 0).toLocaleString()}</div><div class="kpi-foot">Configured user personas</div></div>
-        <div class="card"><div class="card-subtitle">Emulated Client IPs</div><div class="kpi-value">${Number(f.emulated_client_ips || 0).toLocaleString()}</div><div class="kpi-foot">Distinct L3 IPv4 sources</div></div>
-        <div class="card"><div class="card-subtitle">Active L4 Flows</div><div class="kpi-value">${Number(f.active_flows || 0).toLocaleString()}</div><div class="kpi-foot">Open TCP + UDP flow table entries</div></div>
-        <div class="card"><div class="card-subtitle">Established TCP Sessions</div><div class="kpi-value">${Number(f.established_sessions || 0).toLocaleString()}</div><div class="kpi-foot">Completed 3-way handshakes: ${Number(f.tcp_connects || 0).toLocaleString()}</div></div>
-        <div class="card"><div class="card-subtitle">Connections / sec (CPS)</div><div class="kpi-value">${Number(f.cps || 0).toFixed(1)}</div><div class="kpi-foot">New session establishment rate</div></div>
-        <div class="card"><div class="card-subtitle">P99 Tail Latency</div><div class="kpi-value">${Number(f.p99_lat_us || 0).toFixed(2)} <span class="kpi-unit">μs</span></div><div class="kpi-foot">Avg: ${Number(f.lat_avg_us || 0).toFixed(2)} μs | Jitter: ${Number(f.jitter_us || 0).toFixed(2)} μs</div></div>
-        <div class="card"><div class="card-subtitle">Packet Loss &amp; TCP Drops</div><div class="kpi-value">${Number(f.drop_pct || 0).toFixed(4)} <span class="kpi-unit">%</span></div><div class="kpi-foot">TCP Drops: ${Number(f.tcp_drops || 0)} | Rexmits: ${Number(f.tcp_retransmits || 0)}</div></div>
-        <div class="card"><div class="card-subtitle">UniFi Gateway CPU / RAM</div><div class="kpi-value">${f.unifi_gw_cpu != null ? f.unifi_gw_cpu.toFixed(0) + '%' : 'Unavailable'}</div><div class="kpi-foot">${f.unifi_connected ? 'Live UniFi API' : 'Connect UniFi API in Settings'}</div></div>
-      `;
+      const lat = this.fmtLatency(f.lat_avg_us);
+      const p99 = this.fmtLatency(f.p99_lat_us);
+      const jit = this.fmtLatency(f.jitter_us);
+      const u = f.unifi_summary || {};
+      const gwCpu = f.unifi_gw_cpu ?? u.gw_cpu_pct;
+      const tile = (title, value, foot, help) => `<div class="card" title="${this.esc(help)}"><div class="card-subtitle">${title} <span class="help-dot">?</span></div><div class="kpi-value">${value}</div><div class="kpi-foot">${foot}</div></div>`;
+      grid.innerHTML = [
+        tile('Received speed', `${this.fmtBpsParts(f.rx_bps).val} <span class="kpi-unit">${this.fmtBpsParts(f.rx_bps).unit}</span>`, `Sent ${this.fmtBps(f.tx_bps || 0)}`,
+          'How much test traffic made it back. If it is much lower than what was sent, something in the path is dropping or slowing traffic.'),
+        tile('Latency', `${lat.val} <span class="kpi-unit">${lat.unit}</span>`, `${f.running && f.lat_avg_us ? this.rateBadge('latency_ms', Number(f.lat_avg_us) / 1000) : ''} slowest 1%: ${p99.val} ${p99.unit}`,
+          'Delay for a packet to cross the path. Lower is better. Under 10 ms is excellent on a local network; voice calls need under 150 ms.'),
+        tile('Jitter', `${jit.val} <span class="kpi-unit">${jit.unit}</span>`, `${f.running && f.jitter_us ? this.rateBadge('jitter_ms', Number(f.jitter_us) / 1000) : ''} ${f.mos_score ? `call quality ${Number(f.mos_score).toFixed(2)}/5 ${this.rateBadge('mos', f.mos_score)}` : 'variation in delay'}`,
+          'How much the delay changes from packet to packet. High jitter makes calls and video choppy. Call quality (MOS) is an estimate from 1 (bad) to 5 (perfect).'),
+        tile('Packet loss', `${Number(f.drop_pct || 0).toFixed(3)} <span class="kpi-unit">%</span>`, `${f.running ? this.rateBadge('loss_pct', f.drop_pct || 0) : ''} ${Number(f.dropped_packets || 0).toLocaleString()} packets lost`,
+          'Share of packets that never arrived. Anything above 0.1% is noticeable; above 1% hurts calls and downloads.'),
+        tile('Users', Number(f.simulated_users || 0).toLocaleString(), `${Number(f.emulated_client_ips || 0).toLocaleString()} client IP addresses`,
+          'Each simulated user gets its own IP address. This is not the same as open connections — see the next card.'),
+        tile('Open connections', Number(f.active_flows || 0).toLocaleString(), `${Number(f.established_sessions || 0).toLocaleString()} TCP sessions established`,
+          'Connections open right now. This is what fills a firewall\'s connection table.'),
+        tile('New connections / sec', Number(f.cps || 0).toFixed(0), `${Number(f.tcp_retransmits || 0).toLocaleString()} TCP retransmissions`,
+          'How fast new connections are being opened. Firewalls often struggle with a high rate of new connections before they struggle with bandwidth.'),
+        tile('Gateway CPU', gwCpu != null ? `${Number(gwCpu).toFixed(0)}<span class="kpi-unit">%</span>` : '—', f.unifi_connected ? `RAM ${u.gw_mem_pct != null ? Number(u.gw_mem_pct).toFixed(0) + '%' : '—'}${u.gw_temp_c != null ? ` · ${Number(u.gw_temp_c).toFixed(0)}°C` : ''}` : `<a href="javascript:void(0)" onclick="App.navigate('api-integrations')">Connect UniFi</a> to see this`,
+          'Load on your UniFi gateway during the test, read from the UniFi controller.'),
+      ].join('');
     }
   },
 

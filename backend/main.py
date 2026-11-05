@@ -121,7 +121,7 @@ def _with_sensors(frame: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Attach the cached R640 hardware sensor snapshot (temps, fans, power) to a telemetry frame."""
     if not frame:
         return frame
-    return {**frame, "sensors": hw_sensors.latest()}
+    return {**frame, "sensors": hw_sensors.latest(), "capacity": capacity_finder.brief()}
 
 
 async def telemetry_loop() -> None:
@@ -1012,6 +1012,38 @@ async def capacity_stop():
 @app.get("/api/capacity/status")
 async def capacity_status():
     return await asyncio.to_thread(capacity_finder.status)
+
+
+@app.get("/api/capacity/history")
+async def capacity_history():
+    """Past breaking-point tests (newest first), without the per-step detail."""
+    hist = await asyncio.to_thread(capacity_finder.history)
+    return {"results": [{k: h.get(k) for k in ("id", "started_at", "ended_at", "outcome", "message", "max_good_users", "first_bad_users", "settings", "path")} | {"step_count": len(h.get("steps") or [])} for h in hist]}
+
+
+@app.get("/api/capacity/report.pdf")
+async def capacity_report_pdf(id: Optional[int] = Query(None), inline: int = Query(1)):
+    """Detailed breaking-point report: what broke, when, why, and the evidence."""
+    state = await asyncio.to_thread(capacity_finder.get_result, id)
+    if not state or not state.get("steps"):
+        raise HTTPException(status_code=404, detail="No breaking-point test found yet")
+    if state.get("running"):
+        raise HTTPException(status_code=409, detail="The breaking-point test is still running")
+    runs: Dict[int, Any] = {}
+    for st in state.get("steps") or []:
+        rid = st.get("run_id")
+        if rid:
+            run = await asyncio.to_thread(db.get_test_run, int(rid), True)
+            if run:
+                runs[int(rid)] = run
+    gen = getattr(exporter, "generate_capacity_report_pdf", None)
+    if gen is None:
+        raise HTTPException(status_code=503, detail="Breaking-point report generator not installed")
+    pdf = await asyncio.to_thread(gen, state, runs)
+    stamp = datetime.datetime.fromtimestamp(float(state.get("started_at") or time.time())).strftime("%Y%m%d-%H%M")
+    disp = "inline" if inline else "attachment"
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'{disp}; filename="codeblue-breaking-point-{stamp}.pdf"'})
 
 
 # Fields copied from a finished run's config so a re-run is the same test

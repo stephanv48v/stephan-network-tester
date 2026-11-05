@@ -3,6 +3,7 @@
    ========================================================================== */
 
 const STUDIO_ROUTES = new Set([
+  'test-picker',
   'quick-test',
   'traffic-mix-builder',
   'application-simulation',
@@ -41,6 +42,7 @@ const StudioPages = {
 
   render(route) {
     switch (route) {
+      case 'test-picker': return this.renderTestPicker();
       case 'quick-test': return this.renderQuickTest();
       case 'traffic-mix-builder': return this.renderTrafficMixBuilder();
       case 'application-simulation': return this.renderApplicationSimulation();
@@ -58,6 +60,54 @@ const StudioPages = {
   // =========================================================================
   // 1. QUICK TEST (Full Studio Launcher + Pre-Check + Optional Thresholds)
   // =========================================================================
+  // =========================================================================
+  // 0. CHOOSE A TEST — plain-English picker (default tab of Run a Test)
+  // =========================================================================
+  renderTestPicker() {
+    const el = document.getElementById('page-test-picker');
+    const f = App.latest || {};
+    const lab = App.trafficPath(f, 'trex_astf');
+    const tests = [
+      { q: 'How many users can my firewall handle?', name: 'Firewall load test', what: 'Realistic office traffic (web, video, Teams, Microsoft 365, DNS…) from up to 100,000 simulated users.',
+        measures: 'Speed, latency, packet loss, open connections, gateway CPU', time: '2–10 min', lab: true, go: "App.navigate('quick-test')", btn: 'Set up' },
+      { q: 'Where does it start to struggle?', name: 'Find the breaking point', what: 'Adds users step by step (e.g. 10K → 100K) and stops when quality drops below your limits.',
+        measures: 'Highest user count handled cleanly', time: '10–30 min', lab: true, go: "App.navigate('stress-soak')", btn: 'Set up' },
+      { q: 'How fast is my internet, really?', name: 'Internet speed & quality', what: 'Real downloads, uploads, DNS lookups and pings through your gateway to the internet.',
+        measures: 'Download/upload speed, latency, jitter, loss', time: '1 min', lab: false, go: "App.runPreset('internet')", btn: 'Start now' },
+      { q: 'Will calls stay clear when the link is busy?', name: 'Voice quality under load', what: 'Sends phone-call packets marked for priority while filling the link with bulk traffic.',
+        measures: 'Voice latency, jitter, loss and call quality (1–5)', time: '1 min', lab: true, go: "App.runPreset('voice')", btn: 'Start now' },
+      { q: 'What is the maximum raw speed?', name: 'Speed benchmark (RFC 2544-style)', what: 'Blasts fixed-size packets (64 B to 1518 B) one size at a time.',
+        measures: 'Throughput, packets per second and latency per packet size', time: '1–3 min', lab: true, go: "App.navigate('rfc2544-benchmark')", btn: 'Set up' },
+      { q: 'Does it stay stable for hours?', name: 'Soak test', what: 'A long steady test (30 min to 24 h) to catch memory leaks, overheating or slow degradation.',
+        measures: 'Everything above, over time', time: '30 min +', lab: true, go: "App.navigate('stress-soak')", btn: 'Set up' },
+      { q: 'Did the firmware update change anything?', name: 'Before / after comparison', what: 'Re-run any past test with identical settings, then compare the two side by side.',
+        measures: 'Differences in every metric, with a comparison PDF', time: 'Same as the original', lab: false, go: "App.navigate('test-history')", btn: 'Open history' },
+      { q: 'Is the test engine itself OK?', name: 'Engine self-test', what: 'A 30-second, 1 Gbps run that never leaves this server. Use it after updates.',
+        measures: 'Whether TRex is generating traffic correctly', time: '30 s', lab: false, go: "App.runPreset('selftest')", btn: 'Start now' },
+    ];
+    el.innerHTML = `
+      ${lab.cls === 'path-internal' ? `
+        <div class="alert-banner warning" style="margin-bottom:14px;"><div>
+          <strong>Heads up: lab tests currently stay inside this server.</strong>
+          The test ports (eno1–eno4) have no cable, so tests marked <em>"lab"</em> measure the server, not your gateway.
+          The internet test does go through your gateway. To test the firewall itself, cable eno1 to an EFG LAN port and eno2 to a second EFG port.
+        </div></div>` : ''}
+      <div class="picker-grid">
+        ${tests.map((t) => `
+          <div class="picker-card">
+            <div class="picker-q">${t.q}</div>
+            <div class="picker-name">${t.name} ${t.lab ? `<span class="picker-tag" title="${App.esc(lab.tip)}">lab${lab.cls === 'path-internal' ? ' · inside server' : ''}</span>` : ''}</div>
+            <div class="picker-what">${t.what}</div>
+            <div class="picker-meta"><span><strong>Measures:</strong> ${t.measures}</span><span><strong>Takes:</strong> ${t.time}</span></div>
+            <button class="btn ${t.btn === 'Start now' ? 'btn-primary' : 'btn-outline'} btn-sm" onclick="${t.go}">${t.btn === 'Start now' ? '&#9654; ' : ''}${t.btn}</button>
+          </div>`).join('')}
+      </div>
+      <p style="font-size:12px;color:var(--text-secondary);margin-top:12px;">
+        Want to schedule a test to run automatically, or build your own traffic mix? Use the <a href="javascript:void(0)" onclick="App.navigate('test-scheduler')">Schedule</a> and <a href="javascript:void(0)" onclick="App.navigate('traffic-mix-builder')">Traffic mix</a> tabs.
+      </p>
+    `;
+  },
+
   renderQuickTest() {
     const el = document.getElementById('page-quick-test');
     const profOpts = App.profiles.map((p) => `<option value="${p.id}" ${p.id === 'imix' ? 'selected' : ''}>${p.name} (${p.traffic_engine})</option>`).join('');
@@ -65,93 +115,99 @@ const StudioPages = {
       <div class="grid-2">
         <div class="card">
           <div class="card-header">
-            <div class="card-title">&#9654; Configure &amp; Launch Enterprise Test</div>
-            <span class="badge badge-info">Independent Users &amp; Bandwidth</span>
+            <div class="card-title">Set up a custom test</div>
           </div>
 
           <div class="form-group">
-            <label class="form-label">Test Run Name</label>
+            <label class="form-label">Name (shown in history and reports)</label>
             <input type="text" class="form-control" id="qtFullRunName" value="UniFi EFG — 10,000-User Enterprise Validation" />
           </div>
 
           <div class="grid-2" style="gap:12px;">
             <div class="form-group">
-              <label class="form-label">Traffic Profile</label>
+              <label class="form-label">Traffic type</label>
               <select class="form-control" id="qtFullProfile" onchange="StudioPages.onQuickTestProfileChange()">${profOpts}</select>
             </div>
             <div class="form-group">
-              <label class="form-label">Traffic Engine</label>
+              <label class="form-label">How traffic is generated</label>
               <select class="form-control" id="qtFullEngine" onchange="StudioPages.runPrecheckFromQuickTest()">
-                <option value="trex_astf" selected>Cisco TRex ASTF (Stateful TCP/UDP Sessions)</option>
-                <option value="trex_stl">Cisco TRex STL (Stateless Wire-Speed)</option>
-                <option value="internet_wan">Live Internet / WAN Traffic (via 10.20.30.1)</option>
-                <option value="hybrid">Hybrid (TRex + Live Internet/WAN)</option>
+                <option value="trex_astf" selected>Realistic users (real TCP/UDP sessions)</option>
+                <option value="trex_stl">Raw packets at full speed</option>
+                <option value="internet_wan">Real internet traffic through the gateway</option>
+                <option value="hybrid">Both (lab + internet)</option>
               </select>
             </div>
             <div class="form-group">
-              <label class="form-label">Simulated Concurrent Users</label>
+              <label class="form-label">Users</label>
               ${App.usersField('qtFullUsers', 10000)}
             </div>
             <div class="form-group">
-              <label class="form-label">Target Throughput (Gbps)</label>
+              <label class="form-label">Speed to aim for (Gbps)</label>
               <input type="number" class="form-control" id="qtFullGbps" min="0.01" max="20" step="0.05" value="5.00" />
             </div>
             <div class="form-group">
-              <label class="form-label">Execution Mode</label>
+              <label class="form-label">How to run it</label>
               <select class="form-control" id="qtFullMode">
-                <option value="phased" selected>Phased (Ramp-Up &rarr; Steady &rarr; Ramp-Down)</option>
-                <option value="timed">Fixed Timed Duration</option>
-                <option value="step_ramp">Staged Load Steps (10% &rarr; 100%)</option>
-                <option value="continuous">Continuous Until Stopped</option>
+                <option value="phased" selected>Ramp up gently, hold, ramp down</option>
+                <option value="timed">Full speed for a set time</option>
+                <option value="step_ramp">Steps: 10% → 25% → 50% → 75% → 90% → 100%</option>
+                <option value="continuous">Keep running until I stop it</option>
               </select>
             </div>
             <div class="form-group">
-              <label class="form-label">Steady-State Duration (Seconds)</label>
+              <label class="form-label">Length at full load (seconds)</label>
               <input type="number" class="form-control" id="qtFullDuration" min="5" max="86400" value="90" />
             </div>
+          </div>
+          <details class="adv-box">
+            <summary>Advanced network settings</summary>
+            <div class="grid-2" style="gap:12px;margin-top:10px;">
             <div class="form-group">
-              <label class="form-label">Emulated Client IP Base (LAN Port 0)</label>
+              <label class="form-label">First user IP address</label>
               <input type="text" class="form-control mono" id="qtFullSrcIp" value="16.0.0.1" />
             </div>
             <div class="form-group">
-              <label class="form-label">802.1Q VLAN Tag (0 = Untagged) / DSCP</label>
+              <label class="form-label">VLAN tag (0 = none) / DSCP priority</label>
               <div style="display:flex;gap:8px;">
                 <input type="number" class="form-control" id="qtFullVlan" min="0" max="4094" value="0" placeholder="VLAN" />
                 <input type="number" class="form-control" id="qtFullDscp" min="0" max="63" value="0" placeholder="DSCP" />
               </div>
             </div>
+            </div>
+          </details>
+          <div>
           </div>
 
           <div style="border-top:1px solid var(--border-color);padding-top:12px;margin-top:6px;">
             <label style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:12.5px;cursor:pointer;margin-bottom:10px;">
               <input type="checkbox" id="qtEnableThresholds" onchange="document.getElementById('qtThreshBox').style.display=this.checked?'grid':'none'" />
-              <span>Enable Explicit Pass / Fail Acceptance Thresholds (Recommended for Client Reports)</span>
+              <span>Give this test a pass/fail result (recommended for client reports)</span>
             </label>
             <div id="qtThreshBox" class="grid-3" style="display:none;gap:10px;">
               <div class="form-group">
-                <label class="form-label">Min Avg RX (Mbps)</label>
+                <label class="form-label">Must receive at least (Mbps)</label>
                 <input type="number" class="form-control" id="qtThrMinRx" value="500" />
               </div>
               <div class="form-group">
-                <label class="form-label">Max Packet Loss (%)</label>
+                <label class="form-label">Packet loss no more than (%)</label>
                 <input type="number" class="form-control" id="qtThrMaxLoss" step="0.01" value="0.10" />
               </div>
               <div class="form-group">
-                <label class="form-label">Max Avg Latency (μs)</label>
+                <label class="form-label">Average latency no more than (μs; 1000 μs = 1 ms)</label>
                 <input type="number" class="form-control" id="qtThrMaxLat" value="2000" />
               </div>
             </div>
           </div>
 
           <div style="display:flex;gap:10px;margin-top:10px;">
-            <button class="btn btn-outline" onclick="StudioPages.runPrecheckFromQuickTest()">&#10003; Run Pre-Test Check</button>
-            <button class="btn btn-primary" style="flex:1;" onclick="StudioPages.launchFromQuickTest()">&#9654; Launch Test &amp; Open Live Monitor</button>
+            <button class="btn btn-outline" onclick="StudioPages.runPrecheckFromQuickTest()">&#10003; Check readiness</button>
+            <button class="btn btn-primary" style="flex:1;" onclick="StudioPages.launchFromQuickTest()">&#9654; Start test</button>
           </div>
         </div>
 
         <div class="card">
           <div class="card-header">
-            <div class="card-title">&#128269; Pre-Flight Readiness &amp; EFG Path Verification</div>
+            <div class="card-title">Readiness check</div>
           </div>
           <div id="qtPrecheckOutput">
             <div class="alert-banner">
@@ -224,7 +280,7 @@ const StudioPages = {
       }).join('');
       const warns = (res.warnings || []).map((w) => `<div class="alert-banner warning" style="margin-top:10px;"><div><strong>Topology / Capacity Notice:</strong> ${w}</div></div>`).join('');
       out.innerHTML = `
-        <table class="data-table"><thead><tr><th>Subsystem</th><th>Status</th><th>Verification Detail</th></tr></thead><tbody>${rows}</tbody></table>
+        <table class="data-table"><thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead><tbody>${rows}</tbody></table>
         ${warns}
       `;
     } catch (e) {
@@ -905,6 +961,7 @@ const StudioPages = {
            ${st.max_good_users ? `<div style="font-size:20px;font-weight:800;">${Number(st.max_good_users).toLocaleString()} users handled cleanly</div>` : ''}
            ${App.esc(st.message || '')}
            ${st.ended_at ? `<div style="font-size:11.5px;color:var(--text-secondary);margin-top:3px;">Finished ${new Date(st.ended_at * 1000).toLocaleString()}</div>` : ''}
+           ${(st.steps || []).length ? `<div style="margin-top:8px;"><button class="btn btn-primary btn-sm" onclick="App.openBreakItReport(${Number(st.id) || ''})">Open detailed report (PDF)</button></div>` : ''}
          </div></div>`;
     box.innerHTML = `
       ${headline}
@@ -1048,76 +1105,171 @@ const StudioPages = {
     const el = document.getElementById('page-test-scheduler');
     const data = await App.api('/api/schedules');
     const jobs = data.schedules || [];
-    const profOpts = App.profiles.map((p) => `<option value="${p.id}">${p.name}</option>`).join('');
+    const profOpts = App.profiles.map((p) => `<option value="${App.esc(p.id)}" ${p.id === 'imix' ? 'selected' : ''}>${App.esc(p.short_name || p.name)}</option>`).join('');
 
     const rows = jobs.map((j) => `
       <tr>
-        <td><strong>${j.name}</strong></td>
-        <td class="mono">${j.run_at_iso || j.cron_expr}</td>
-        <td>${j.profile_id}</td>
+        <td><strong>${App.esc(j.name)}</strong></td>
+        <td>${App.esc(this.describeSchedule(j))}</td>
+        <td>${App.esc(((App.profiles || []).find((p) => p.id === j.profile_id) || {}).short_name || j.profile_id)}</td>
         <td>${Number(j.simulated_users).toLocaleString()}</td>
-        <td>${j.duration_sec}s</td>
-        <td>${j.last_run_id ? `<a href="javascript:void(0)" onclick="StudioPages.showRunDetailModal(${j.last_run_id})">Run #${j.last_run_id}</a>` : 'Never'}</td>
-        <td><button class="btn btn-outline btn-sm" onclick="StudioPages.deleteSchedule(${j.id})">Delete</button></td>
+        <td>${Math.round(Number(j.duration_sec || 0) / 60) || '<1'} min</td>
+        <td>${j.last_run_id ? `<a href="javascript:void(0)" onclick="StudioPages.showRunDetailModal(${Number(j.last_run_id)})">Test #${j.last_run_id}</a>` : 'Not yet'}</td>
+        <td><button class="btn btn-outline btn-sm" onclick="StudioPages.deleteSchedule(${Number(j.id)})">Delete</button></td>
       </tr>
     `).join('');
 
     el.innerHTML = `
       <div class="grid-2">
         <div class="card">
-          <div class="card-header"><div class="card-title">Schedule Automated Benchmark</div></div>
+          <div class="card-header"><div class="card-title">Schedule a test</div></div>
+          <p style="font-size:12.5px;color:var(--text-secondary);margin-bottom:12px;">Tests run automatically on the server — your browser doesn't need to be open. A scheduled test is skipped if another test is already running at that time.</p>
           <div class="form-group">
-            <label class="form-label">Job Name</label>
-            <input type="text" class="form-control" id="schName" value="Nightly 2:00 AM 10K-User EFG Soak" />
+            <label class="form-label">Name</label>
+            <input type="text" class="form-control" id="schName" value="Nightly firewall load test" />
           </div>
           <div class="grid-2" style="gap:10px;">
             <div class="form-group">
-              <label class="form-label">5-Field Cron Expression</label>
+              <label class="form-label">How often</label>
+              <select class="form-control" id="schFreq" onchange="StudioPages.onSchedFreqChange()">
+                <option value="daily" selected>Every day</option>
+                <option value="weekdays">Weekdays (Mon–Fri)</option>
+                <option value="weekly">Once a week</option>
+                <option value="hours">Every few hours</option>
+                <option value="once">Once, on a date</option>
+                <option value="cron">Advanced (cron)</option>
+              </select>
+            </div>
+            <div class="form-group" id="schTimeBox">
+              <label class="form-label">At</label>
+              <input type="time" class="form-control" id="schTime" value="02:00" />
+            </div>
+            <div class="form-group" id="schDayBox" style="display:none;">
+              <label class="form-label">Day</label>
+              <select class="form-control" id="schDay">
+                <option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option>
+                <option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="0">Sunday</option>
+              </select>
+            </div>
+            <div class="form-group" id="schHoursBox" style="display:none;">
+              <label class="form-label">Every</label>
+              <select class="form-control" id="schHours"><option value="1">1 hour</option><option value="2">2 hours</option><option value="4" selected>4 hours</option><option value="6">6 hours</option><option value="12">12 hours</option></select>
+            </div>
+            <div class="form-group" id="schOnceBox" style="display:none;">
+              <label class="form-label">Date and time</label>
+              <input type="datetime-local" class="form-control" id="schOnce" />
+            </div>
+            <div class="form-group" id="schCronBox" style="display:none;">
+              <label class="form-label">Cron (min hour day month weekday)</label>
               <input type="text" class="form-control mono" id="schCron" value="0 2 * * *" />
             </div>
             <div class="form-group">
-              <label class="form-label">Profile</label>
+              <label class="form-label">Test</label>
               <select class="form-control" id="schProf">${profOpts}</select>
             </div>
             <div class="form-group">
-              <label class="form-label">Simulated Users</label>
+              <label class="form-label">Length (minutes)</label>
+              <input type="number" class="form-control" id="schDur" min="1" max="1440" value="5" />
+            </div>
+            <div class="form-group" style="grid-column:1 / -1;">
+              <label class="form-label">Users</label>
               ${App.usersField('schUsers', 10000)}
             </div>
-            <div class="form-group">
-              <label class="form-label">Duration (sec)</label>
-              <input type="number" class="form-control" id="schDur" value="300" />
-            </div>
           </div>
-          <button class="btn btn-primary btn-block" onclick="StudioPages.createSchedule()">+ Save Scheduled Job</button>
+          <div id="schPreview" style="font-size:12.5px;color:var(--text-secondary);margin:4px 0 10px;"></div>
+          <button class="btn btn-primary btn-block" onclick="StudioPages.createSchedule()">+ Save schedule</button>
         </div>
-
         <div class="card">
-          <div class="card-header"><div class="card-title">Configured Schedules (${jobs.length})</div></div>
+          <div class="card-header"><div class="card-title">Scheduled tests (${jobs.length})</div></div>
           <div class="table-wrap">
             <table class="data-table">
-              <thead><tr><th>Job</th><th>Schedule</th><th>Profile</th><th>Users</th><th>Dur</th><th>Last Run</th><th></th></tr></thead>
-              <tbody>${rows || '<tr><td colspan="7">No schedules configured.</td></tr>'}</tbody>
+              <thead><tr><th>Name</th><th>When</th><th>Test</th><th>Users</th><th>Length</th><th>Last run</th><th></th></tr></thead>
+              <tbody>${rows || '<tr><td colspan="7" style="color:var(--text-secondary);">Nothing scheduled yet.</td></tr>'}</tbody>
             </table>
           </div>
         </div>
       </div>
     `;
+    ['schFreq', 'schTime', 'schDay', 'schHours', 'schOnce', 'schCron'].forEach((id) => document.getElementById(id)?.addEventListener('input', () => this.updateSchedPreview()));
+    this.onSchedFreqChange();
+  },
+
+  onSchedFreqChange() {
+    const f = document.getElementById('schFreq')?.value;
+    const show = (id, on) => { const e = document.getElementById(id); if (e) e.style.display = on ? '' : 'none'; };
+    show('schTimeBox', ['daily', 'weekdays', 'weekly'].includes(f));
+    show('schDayBox', f === 'weekly');
+    show('schHoursBox', f === 'hours');
+    show('schOnceBox', f === 'once');
+    show('schCronBox', f === 'cron');
+    this.updateSchedPreview();
+  },
+
+  // Turn the friendly choices into either a cron expression or a one-off date
+  _schedSpec() {
+    const f = document.getElementById('schFreq').value;
+    const [hh, mm] = (document.getElementById('schTime').value || '02:00').split(':').map((x) => parseInt(x, 10) || 0);
+    if (f === 'daily') return { cron_expr: `${mm} ${hh} * * *` };
+    if (f === 'weekdays') return { cron_expr: `${mm} ${hh} * * 1-5` };
+    if (f === 'weekly') return { cron_expr: `${mm} ${hh} * * ${document.getElementById('schDay').value}` };
+    if (f === 'hours') return { cron_expr: `0 */${document.getElementById('schHours').value} * * *` };
+    if (f === 'once') {
+      const v = document.getElementById('schOnce').value;
+      return v ? { run_at_iso: `${v}:00`, cron_expr: '' } : { error: 'Pick a date and time.' };
+    }
+    const c = document.getElementById('schCron').value.trim();
+    return c.split(/\s+/).length === 5 ? { cron_expr: c } : { error: 'A cron expression needs 5 fields: minute hour day month weekday.' };
+  },
+
+  updateSchedPreview() {
+    const box = document.getElementById('schPreview');
+    if (!box) return;
+    const s = this._schedSpec();
+    box.textContent = s.error ? s.error : `Will run: ${this.describeSchedule(s)} (server time).`;
+  },
+
+  // Plain-English description of a schedule (cron or one-off)
+  describeSchedule(j) {
+    if (j.run_at_iso) return `once on ${new Date(j.run_at_iso).toLocaleString()}`;
+    const p = String(j.cron_expr || '').trim().split(/\s+/);
+    if (p.length !== 5) return j.cron_expr || '—';
+    const [mi, hr, dom, mon, dow] = p;
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const at = /^\d+$/.test(mi) && /^\d+$/.test(hr) ? `at ${hr.padStart(2, '0')}:${mi.padStart(2, '0')}` : '';
+    if (dom === '*' && mon === '*') {
+      if (hr.startsWith('*/') && mi === '0') return `every ${hr.slice(2)} hours`;
+      if (dow === '*' && at) return `every day ${at}`;
+      if (dow === '1-5' && at) return `weekdays ${at}`;
+      if (/^\d$/.test(dow) && at) return `every ${days[Number(dow) % 7]} ${at}`;
+    }
+    return `cron "${j.cron_expr}"`;
   },
 
   async createSchedule() {
-    await App.api('/api/schedules', {
-      method: 'POST',
-      body: JSON.stringify({
-        name: document.getElementById('schName').value.trim(),
-        cron_expr: document.getElementById('schCron').value.trim(),
-        profile_id: document.getElementById('schProf').value,
-        simulated_users: App.readUsers('schUsers'),
-        duration_sec: parseInt(document.getElementById('schDur').value, 10) || 300,
-        test_mode: 'phased',
-      }),
-    });
-    App.toast('Scheduled job created.', 'success');
-    this.renderScheduler();
+    const spec = this._schedSpec();
+    if (spec.error) {
+      App.toast(spec.error, 'error');
+      return;
+    }
+    const name = document.getElementById('schName').value.trim() || 'Scheduled test';
+    try {
+      await App.api('/api/schedules', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          ...spec,
+          profile_id: document.getElementById('schProf').value,
+          simulated_users: App.readUsers('schUsers'),
+          simulated_devices: App.readUsers('schUsers') * 2,
+          duration_sec: Math.max(1, parseInt(document.getElementById('schDur').value, 10) || 5) * 60,
+          test_mode: 'phased',
+        }),
+      });
+      App.toast(`Saved: ${name} — ${this.describeSchedule(spec)}.`, 'success');
+      this.renderScheduler();
+    } catch (e) {
+      App.toast(`Could not save: ${e.message}`, 'error');
+    }
   },
 
   async deleteSchedule(id) {
