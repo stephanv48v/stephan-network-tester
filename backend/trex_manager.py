@@ -936,7 +936,8 @@ class TRexEngineManager:
                 f"Run #{run_id}: {self.test_name}",
                 f"Verdict={summary.get('verdict') if summary else 'N/A'}",
             )
-        self.active_run_id = None
+        # active_run_id was already cleared under the lock; clearing it again here could wipe
+        # the id of a test that started while this one was being finalized.
         return {"status": status, "run_id": run_id, "summary": summary}
 
     def get_hardware_snapshot(self, force: bool = False) -> Dict[str, Any]:

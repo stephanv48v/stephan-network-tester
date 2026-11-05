@@ -152,7 +152,15 @@ class CapacityFinder:
                     outcome = "cancelled"
                     break
 
-                run = db.get_test_run(int(run_id), False) or {}
+                # The engine flips "running" off before it finishes saving the run summary,
+                # so wait until the run is finalized in the database before judging it.
+                run: Dict[str, Any] = {}
+                save_deadline = time.time() + 60
+                while time.time() < save_deadline:
+                    run = db.get_test_run(int(run_id), False) or {}
+                    if run.get("status") not in (None, "running") and (run.get("summary") or {}).get("sample_count") is not None:
+                        break
+                    time.sleep(0.5)
                 summary = run.get("summary") or {}
                 ok, reason = self._evaluate(summary, s)
                 self._record(idx, users, run_id, summary, ok, reason)
