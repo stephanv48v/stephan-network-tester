@@ -67,8 +67,6 @@ def build_astf_enterprise_profile(
     ASTFTemplate = astf_api["ASTFTemplate"]
     ASTFTCPClientTemplate = astf_api["ASTFTCPClientTemplate"]
     ASTFTCPServerTemplate = astf_api["ASTFTCPServerTemplate"]
-    ASTFUDPClientTemplate = astf_api.get("ASTFUDPClientTemplate")
-    ASTFUDPServerTemplate = astf_api.get("ASTFUDPServerTemplate")
     ASTFAssociationRule = astf_api["ASTFAssociationRule"]
 
     c_start, c_end, ip_count = compute_client_ip_range(src_ip_base, simulated_users)
@@ -97,14 +95,14 @@ def build_astf_enterprise_profile(
         template_summary.append({"key": key, "proto": "TCP", "port": port, "weight_pct": weight_pct, "target_cps": round(cps, 2)})
 
     def add_udp_template(key: str, port: int, prog_c: Any, prog_s: Any, weight_pct: float) -> None:
-        if weight_pct <= 0.05 or ASTFUDPClientTemplate is None or ASTFUDPServerTemplate is None:
+        if weight_pct <= 0.05:
             return
         share_bps = max(20_000.0, target_bps * (weight_pct / 100.0))
         bytes_per_sess = TEMPLATE_BYTES_PER_SESSION.get(key, 2_000)
-        # Cap UDP session CPS to avoid exhausting ephemeral UDP sockets on virtual veth
+        # In Cisco TRex v3.04 ASTF, UDP programs (ASTFProgram(stream=False)) use ASTFTCPClientTemplate/ServerTemplate
         cps = max(0.5, min(8000.0, share_bps / (bytes_per_sess * 8.0)))
-        uc = ASTFUDPClientTemplate(program=prog_c, ip_gen=ip_gen, cps=round(cps, 2), port=port)
-        us = ASTFUDPServerTemplate(program=prog_s, assoc=ASTFAssociationRule(port=port))
+        uc = ASTFTCPClientTemplate(program=prog_c, ip_gen=ip_gen, cps=round(cps, 2), port=port)
+        us = ASTFTCPServerTemplate(program=prog_s, assoc=ASTFAssociationRule(port=port))
         templates.append(ASTFTemplate(client_template=uc, server_template=us))
         template_summary.append({"key": key, "proto": "UDP", "port": port, "weight_pct": weight_pct, "target_cps": round(cps, 2)})
 

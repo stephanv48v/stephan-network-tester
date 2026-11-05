@@ -23,20 +23,12 @@ from typing import Any, Dict, List, Optional, Union
 
 import psutil
 import six
-import zmq
 
 warnings.filterwarnings("ignore")
 
 # ---------------------------------------------------------------------------
 # Python 3.12+ / 3.14 Compatibility Shims for Cisco TRex Python Control Plane
 # ---------------------------------------------------------------------------
-import scapy.all  # Pre-import modern venv scapy before TRex prepends bundled scapy-2.4.3
-
-_scapy_six = types.ModuleType("scapy.modules.six")
-_scapy_six.moves = six.moves
-sys.modules["scapy.modules.six"] = _scapy_six
-sys.modules["scapy.modules.six.moves"] = six.moves
-
 if "imp" not in sys.modules:
     _imp = types.ModuleType("imp")
 
@@ -58,6 +50,22 @@ TREX_API_PATHS = [
 for _p in TREX_API_PATHS:
     if os.path.isdir(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
+
+try:
+    import trex  # Load TRex external_libs (texttable, simpy, dpkt, trex_openssl) before zmq/scapy
+    # Prefer venv's Python-3.14-compatible scapy & Cython pyzmq over TRex's Python-3.8 bundled copies
+    sys.path[:] = [p for p in sys.path if "scapy-2.4.3" not in p and "pyzmq-ctypes" not in p]
+except Exception:
+    pass
+
+import scapy.all  # noqa: E402
+import scapy.modules  # noqa: E402
+
+sys.modules["scapy.modules.six"] = six
+sys.modules["scapy.modules.six.moves"] = six.moves
+scapy.modules.six = six
+
+import zmq  # noqa: E402
 
 TREX_STL_AVAILABLE = False
 try:
@@ -94,8 +102,6 @@ try:
         ASTFTCPClientTemplate,
         ASTFTCPServerTemplate,
         ASTFTemplate,
-        ASTFUDPClientTemplate,
-        ASTFUDPServerTemplate,
     )
     ASTF_API_DICT = {
         "ASTFClient": ASTFClient,
@@ -107,8 +113,6 @@ try:
         "ASTFTemplate": ASTFTemplate,
         "ASTFTCPClientTemplate": ASTFTCPClientTemplate,
         "ASTFTCPServerTemplate": ASTFTCPServerTemplate,
-        "ASTFUDPClientTemplate": ASTFUDPClientTemplate,
-        "ASTFUDPServerTemplate": ASTFUDPServerTemplate,
         "ASTFAssociationRule": ASTFAssociationRule,
     }
     TREX_ASTF_AVAILABLE = True
@@ -200,7 +204,7 @@ class TRexEngineManager:
         self.trex_server_version: str = "Cisco TRex v3.04 (ASTF DPDK)"
         self.trex_daemon_mode: str = "ASTF"
         self.trex_system_info: Dict[str, Any] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
         # Active Test State
         self.running: bool = False
@@ -352,7 +356,7 @@ class TRexEngineManager:
         """Pre-flight verification of TRex engine, NIC link speeds, management safety, and EFG path."""
         hw = self.get_hardware_snapshot(force=True)
         topo = hw.get("topology_assessment") or {}
-        engine_type = str(req.get("traffic_engine", "trex_astf"))
+        engine_type = str(req.get("traffic_engine") or req.get("traffic_mode") or "trex_astf")
         users = int(req.get("simulated_users", 10000))
         target_gbps = float(req.get("target_gbps", 5.0))
 
@@ -503,29 +507,30 @@ class TRexEngineManager:
         self.target_bps = self.base_target_bps * frac
         self._last_applied_mult = frac
 
-        if not self.trex_connected or self.client is None:
-            return False
-
-        if self.client_mode == "ASTF" and self.traffic_engine in ("trex_astf", "hybrid"):
-            try:
-                self.client.update(mult=round(frac, 3))
-                return True
-            except Exception:
+        with self._lock:
+            if not self.trex_connected or self.client is None:
                 return False
 
-        if self.client_mode == "STL" and self.traffic_engine in ("trex_stl", "hybrid"):
-            ports = [0, 1] if self.direction == "bidirectional" else [0]
-            per_port_bps = self.target_bps / len(ports)
-            mult_str = f"{per_port_bps / 1e9:.3f}gbps" if per_port_bps >= 1e9 else f"{max(0.5, per_port_bps / 1e6):.2f}mbps"
-            try:
-                self.client.update(ports=ports, mult=mult_str)
-                return True
-            except Exception:
+            if self.client_mode == "ASTF" and self.traffic_engine in ("trex_astf", "hybrid"):
                 try:
-                    self.client.update(ports=ports, mult=f"{max(1.0, min(100.0, self.rate_pct * frac))}%")
+                    self.client.update(mult=round(frac, 3))
                     return True
                 except Exception:
                     return False
+
+            if self.client_mode == "STL" and self.traffic_engine in ("trex_stl", "hybrid"):
+                ports = [0, 1] if self.direction == "bidirectional" else [0]
+                per_port_bps = self.target_bps / len(ports)
+                mult_str = f"{per_port_bps / 1e9:.3f}gbps" if per_port_bps >= 1e9 else f"{max(0.5, per_port_bps / 1e6):.2f}mbps"
+                try:
+                    self.client.update(ports=ports, mult=mult_str)
+                    return True
+                except Exception:
+                    try:
+                        self.client.update(ports=ports, mult=f"{max(1.0, min(100.0, self.rate_pct * frac))}%")
+                        return True
+                    except Exception:
+                        return False
         return False
 
     def start_test(self, req: Dict[str, Any]) -> Dict[str, Any]:
@@ -546,9 +551,9 @@ class TRexEngineManager:
         prof = self._resolve_profile(profile_id)
 
         self.profile_id = profile_id
-        self.traffic_engine = str(req.get("traffic_engine") or prof.get("traffic_engine") or "trex_astf")
+        self.traffic_engine = str(req.get("traffic_engine") or req.get("traffic_mode") or prof.get("traffic_engine") or "trex_astf")
         self.direction = str(req.get("direction", "bidirectional" if self.traffic_engine == "trex_astf" else "unidirectional"))
-        self.test_mode = str(req.get("test_mode", "phased" if self.traffic_engine == "trex_astf" else "timed"))
+        self.test_mode = str(req.get("test_mode") or req.get("mode") or ("phased" if self.traffic_engine == "trex_astf" else "timed"))
         self.simulated_users = max(1, min(65000, int(req.get("simulated_users", prof.get("default_users", 10000)))))
         self.simulated_devices = max(1, min(250000, int(req.get("simulated_devices", prof.get("default_devices", self.simulated_users * 2)))))
         self.link_capacity_mbps = max(10, min(100000, int(req.get("link_capacity_mbps", 10000))))
@@ -557,6 +562,10 @@ class TRexEngineManager:
             target_gbps = max(0.005, float(req["target_gbps"]))
             self.base_target_bps = target_gbps * 1e9
             self.rate_pct = min(100.0, round((target_gbps * 1000.0 / self.link_capacity_mbps) * 100.0, 2))
+        elif req.get("wan_target_mbps") is not None:
+            wan_mbps = max(0.5, float(req["wan_target_mbps"]))
+            self.base_target_bps = wan_mbps * 1e6
+            self.rate_pct = min(100.0, round((wan_mbps / self.link_capacity_mbps) * 100.0, 2))
         else:
             self.rate_pct = max(0.5, min(100.0, float(req.get("rate_pct", prof.get("default_rate_pct", 50.0)))))
             self.base_target_bps = (self.link_capacity_mbps * 1_000_000.0) * (self.rate_pct / 100.0)
@@ -597,8 +606,20 @@ class TRexEngineManager:
         c_start, c_end, ip_cnt = compute_client_ip_range(req.get("src_ip_start", "16.0.0.1"), self.simulated_users)
         self.emulated_client_ips = ip_cnt
 
-        self.test_name = req.get("name") or f"{prof.get('short_name', prof['name'])} ({self.simulated_users:,} Users)"
-        thresholds = req.get("thresholds") if isinstance(req.get("thresholds"), dict) else None
+        self.test_name = req.get("name") or req.get("test_name") or f"{prof.get('short_name', prof['name'])} ({self.simulated_users:,} Users)"
+        raw_thresh = req.get("thresholds") if isinstance(req.get("thresholds"), dict) else None
+        if req.get("thresholds_enabled") is False:
+            thresholds = None
+        elif raw_thresh:
+            thresholds = dict(raw_thresh)
+            if req.get("thresholds_enabled") is True:
+                thresholds["enabled"] = True
+            if thresholds.get("min_achieved_gbps") is not None and thresholds.get("min_rx_mbps") is None:
+                thresholds["min_rx_mbps"] = float(thresholds["min_achieved_gbps"]) * 1000.0
+            if thresholds.get("max_p99_lat_us") is not None and thresholds.get("max_p99_latency_us") is None:
+                thresholds["max_p99_latency_us"] = float(thresholds["max_p99_lat_us"])
+        else:
+            thresholds = None
 
         hw_snap = self.get_hardware_snapshot()
         self.astf_meta = {}
@@ -607,67 +628,70 @@ class TRexEngineManager:
         # Start selected TRex Engine Mode
         if self.traffic_engine == "trex_astf":
             if self.ensure_trex_daemon_mode("ASTF") and self.client is not None and TREX_ASTF_AVAILABLE:
-                try:
-                    self.client.reset()
-                    self.client.clear_stats()
-                    astf_prof, meta = build_astf_enterprise_profile(
-                        astf_api=ASTF_API_DICT,
-                        simulated_users=self.simulated_users,
-                        target_bps=self.base_target_bps,
-                        normalized_mix=norm_mix,
-                        src_ip_base=req.get("src_ip_start", "16.0.0.1"),
-                        dst_ip_base=req.get("dst_ip_start", "48.0.0.1"),
-                    )
-                    self.astf_meta = meta
-                    self.client.load_profile(astf_prof)
-                    init_mult = 0.15 if (self.test_mode in ("phased", "soak") and self.ramp_up_sec > 0) else 1.0
-                    self._last_applied_mult = init_mult
-                    self.client.start(
-                        mult=init_mult,
-                        duration=-1 if self.duration_sec <= 0 else self.duration_sec + 5,
-                        latency_pps=200,
-                    )
-                    trex_started = True
-                except Exception as e:
-                    db.log_audit("TRex ASTF Engine", "ASTF Start Error", self.profile_id, str(e))
+                with self._lock:
+                    try:
+                        self.client.reset()
+                        self.client.clear_stats()
+                        astf_prof, meta = build_astf_enterprise_profile(
+                            astf_api=ASTF_API_DICT,
+                            simulated_users=self.simulated_users,
+                            target_bps=self.base_target_bps,
+                            normalized_mix=norm_mix,
+                            src_ip_base=req.get("src_ip_start", "16.0.0.1"),
+                            dst_ip_base=req.get("dst_ip_start", "48.0.0.1"),
+                        )
+                        self.astf_meta = meta
+                        self.client.load_profile(astf_prof)
+                        init_mult = 0.15 if (self.test_mode in ("phased", "soak") and self.ramp_up_sec > 0) else 1.0
+                        self._last_applied_mult = init_mult
+                        self.client.start(
+                            mult=init_mult,
+                            duration=-1 if self.duration_sec <= 0 else self.duration_sec + 5,
+                            latency_pps=200,
+                        )
+                        trex_started = True
+                    except Exception as e:
+                        db.log_audit("TRex ASTF Engine", "ASTF Start Error", self.profile_id, str(e))
 
         elif self.traffic_engine in ("trex_stl", "hybrid"):
             if self.ensure_trex_daemon_mode("STL") and self.client is not None and TREX_STL_AVAILABLE:
-                try:
-                    ports = [0, 1] if self.direction == "bidirectional" else [0]
-                    self.client.reset(ports=[0, 1])
-                    self.client.clear_stats(ports=[0, 1])
-                    temp_cfg = {
-                        "vlan_id": int(req.get("vlan_id", prof.get("vlan_id", 0)) or 0),
-                        "dscp": int(req.get("dscp", prof.get("dscp", 0)) or 0),
-                        "simulated_users": self.simulated_users,
-                        "src_ip_start": req.get("src_ip_start", "16.0.0.1"),
-                        "dst_ip_start": req.get("dst_ip_start", "48.0.0.1"),
-                        "protocol_mix": norm_mix,
-                        "override_frame_size": req.get("override_frame_size"),
-                    }
-                    for p_idx in ports:
-                        streams = self._build_trex_stl_streams(prof, temp_cfg, port_idx=p_idx)
-                        self.client.add_streams(streams, ports=[p_idx])
-                    init_frac = 0.15 if (self.test_mode in ("phased", "soak") and self.ramp_up_sec > 0) else 1.0
-                    self._last_applied_mult = init_frac
-                    per_port_bps = (self.base_target_bps * init_frac) / len(ports)
-                    mult_str = f"{per_port_bps / 1e9:.3f}gbps" if per_port_bps >= 1e9 else f"{max(1.0, per_port_bps / 1e6):.2f}mbps"
+                with self._lock:
                     try:
-                        self.client.start(ports=ports, mult=mult_str, duration=-1 if self.duration_sec <= 0 else self.duration_sec + 2)
-                    except Exception:
-                        self.client.start(ports=ports, mult=f"{max(1.0, min(100.0, self.rate_pct * init_frac))}%", duration=-1 if self.duration_sec <= 0 else self.duration_sec + 2)
-                    trex_started = True
-                except Exception as e:
-                    db.log_audit("TRex STL Engine", "STL Start Error", self.profile_id, str(e))
+                        ports = [0, 1] if self.direction == "bidirectional" else [0]
+                        self.client.reset(ports=[0, 1])
+                        self.client.clear_stats(ports=[0, 1])
+                        temp_cfg = {
+                            "vlan_id": int(req.get("vlan_id", prof.get("vlan_id", 0)) or 0),
+                            "dscp": int(req.get("dscp", prof.get("dscp", 0)) or 0),
+                            "simulated_users": self.simulated_users,
+                            "src_ip_start": req.get("src_ip_start", "16.0.0.1"),
+                            "dst_ip_start": req.get("dst_ip_start", "48.0.0.1"),
+                            "protocol_mix": norm_mix,
+                            "override_frame_size": req.get("override_frame_size"),
+                        }
+                        for p_idx in ports:
+                            streams = self._build_trex_stl_streams(prof, temp_cfg, port_idx=p_idx)
+                            self.client.add_streams(streams, ports=[p_idx])
+                        init_frac = 0.15 if (self.test_mode in ("phased", "soak") and self.ramp_up_sec > 0) else 1.0
+                        self._last_applied_mult = init_frac
+                        per_port_bps = (self.base_target_bps * init_frac) / len(ports)
+                        mult_str = f"{per_port_bps / 1e9:.3f}gbps" if per_port_bps >= 1e9 else f"{max(1.0, per_port_bps / 1e6):.2f}mbps"
+                        try:
+                            self.client.start(ports=ports, mult=mult_str, duration=-1 if self.duration_sec <= 0 else self.duration_sec + 2)
+                        except Exception:
+                            self.client.start(ports=ports, mult=f"{max(1.0, min(100.0, self.rate_pct * init_frac))}%", duration=-1 if self.duration_sec <= 0 else self.duration_sec + 2)
+                        trex_started = True
+                    except Exception as e:
+                        db.log_audit("TRex STL Engine", "STL Start Error", self.profile_id, str(e))
 
         internet_started = False
         if self.traffic_engine in ("internet_wan", "hybrid"):
             inet_opts = req.get("internet_options") or {}
             mgmt_if = hw_snap.get("management_interface") or "enp216s0"
+            wan_mbps_opt = inet_opts.get("wan_target_mbps") or req.get("wan_target_mbps")
             inet_target_bps = (
-                float(inet_opts.get("wan_target_mbps", 0)) * 1e6
-                if inet_opts.get("wan_target_mbps")
+                float(wan_mbps_opt) * 1e6
+                if wan_mbps_opt
                 else min(self.base_target_bps, 500_000_000.0)
             )
             internet_engine.configure_and_start(
@@ -818,14 +842,15 @@ class TRexEngineManager:
         self.running = False
         self.current_phase = "idle"
 
-        if self.trex_connected and self.client is not None:
-            try:
-                if self.client_mode == "ASTF":
-                    self.client.stop(is_remove=True)
-                else:
-                    self.client.stop(ports=[0, 1])
-            except Exception:
-                pass
+        with self._lock:
+            if self.trex_connected and self.client is not None:
+                try:
+                    if self.client_mode == "ASTF":
+                        self.client.stop(is_remove=True)
+                    else:
+                        self.client.stop(ports=[0, 1])
+                except Exception:
+                    pass
 
         if internet_engine.running:
             internet_engine.stop()
@@ -887,14 +912,15 @@ class TRexEngineManager:
             "port_stats": {},
             "telemetry_source": "Cisco TRex Disconnected",
         }
-        if not self.trex_connected or self.client is None:
-            return empty
-        try:
-            st = self.client.get_stats() or {}
-        except Exception:
-            self.trex_connected = False
-            empty["telemetry_source"] = "Cisco TRex Reconnecting"
-            return empty
+        with self._lock:
+            if not self.trex_connected or self.client is None:
+                return empty
+            try:
+                st = self.client.get_stats() or {}
+            except Exception:
+                self.trex_connected = False
+                empty["telemetry_source"] = "Cisco TRex Reconnecting"
+                return empty
 
         tot = st.get("total", {})
         gl = st.get("global", {})
@@ -1047,6 +1073,7 @@ class TRexEngineManager:
             idle_frame = {
                 "ts": now,
                 "running": False,
+                "is_running": False,
                 "run_id": None,
                 "test_name": "Idle — Ready",
                 "profile_id": self.profile_id,
@@ -1193,6 +1220,7 @@ class TRexEngineManager:
         frame = {
             "ts": now,
             "running": True,
+            "is_running": True,
             "run_id": self.active_run_id,
             "test_name": self.test_name,
             "profile_id": self.profile_id,

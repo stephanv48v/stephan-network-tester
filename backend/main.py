@@ -361,17 +361,18 @@ async def run_rfc2544_sweep(payload: Dict[str, Any]):
         fsz_int = max(64, min(9000, int(fsz)))
 
         def _start_trial(sz: int) -> None:
-            c = engine.client
-            c.reset(ports=[0, 1])
-            c.clear_stats(ports=[0, 1])
-            streams = engine._build_trex_stl_streams(
-                PREBUILT_PROFILES["bw_1518b"],
-                {"override_frame_size": sz, "simulated_users": 1000, "vlan_id": int(payload.get("vlan_id", 0) or 0)},
-                port_idx=0,
-            )
-            c.add_streams(streams, ports=[0])
-            mult_str = f"{target_gbps:.3f}gbps" if target_gbps >= 1.0 else f"{max(1.0, target_gbps * 1000.0):.1f}mbps"
-            c.start(ports=[0], mult=mult_str, duration=trial_sec + 1)
+            with engine._lock:
+                c = engine.client
+                c.reset(ports=[0, 1])
+                c.clear_stats(ports=[0, 1])
+                streams = engine._build_trex_stl_streams(
+                    PREBUILT_PROFILES["bw_1518b"],
+                    {"override_frame_size": sz, "simulated_users": 1000, "vlan_id": int(payload.get("vlan_id", 0) or 0)},
+                    port_idx=0,
+                )
+                c.add_streams(streams, ports=[0])
+                mult_str = f"{target_gbps:.3f}gbps" if target_gbps >= 1.0 else f"{max(1.0, target_gbps * 1000.0):.1f}mbps"
+                c.start(ports=[0], mult=mult_str, duration=trial_sec + 1)
 
         await asyncio.to_thread(_start_trial, fsz_int)
 
@@ -409,7 +410,12 @@ async def run_rfc2544_sweep(payload: Dict[str, Any]):
             trial_samples.append(sample_obj)
             await asyncio.to_thread(db.insert_telemetry_sample, run_id, sample_obj)
 
-        await asyncio.to_thread(lambda: engine.client.stop(ports=[0, 1]))
+        def _stop_trial() -> None:
+            with engine._lock:
+                if engine.client is not None:
+                    engine.client.stop(ports=[0, 1])
+
+        await asyncio.to_thread(_stop_trial)
 
         last_s = trial_samples[-1]
         avg_rx_mbps = sum(s["rx_bps"] for s in trial_samples) / len(trial_samples) / 1e6
