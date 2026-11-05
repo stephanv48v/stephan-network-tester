@@ -85,14 +85,12 @@ class InternetTrafficEngine:
         self.probe_host: str = "1.1.1.1"
         self.worker_count: int = 6
 
-        # Live measured state
+        # Live measured state (rolling 1.25s window avoids 0-ticks on 1Hz NIC driver stat coalescing)
         self._start_counters: Dict[str, int] = {}
-        self._prev_counters: Dict[str, int] = {}
-        self._prev_ts: float = 0.0
+        self._counter_window: Deque[Dict[str, float]] = deque(maxlen=16)
         self.app_rx_bytes: int = 0
         self.app_tx_bytes: int = 0
         self.completed_requests: int = 0
-        self._prev_requests: int = 0
         self.active_connections: int = 0
 
         # Real RTT / Jitter / Loss measurements (in microseconds)
@@ -131,13 +129,21 @@ class InternetTrafficEngine:
         now = time.time()
         init_c = _read_iface_counters(self.interface)
         self._start_counters = dict(init_c)
-        self._prev_counters = dict(init_c)
-        self._prev_ts = now
         self.app_rx_bytes = 0
         self.app_tx_bytes = 0
         self.completed_requests = 0
-        self._prev_requests = 0
         self.active_connections = 0
+        self._counter_window.clear()
+        self._counter_window.append({
+            "ts": now,
+            "tx_bytes": float(init_c["tx_bytes"]),
+            "rx_bytes": float(init_c["rx_bytes"]),
+            "tx_packets": float(init_c["tx_packets"]),
+            "rx_packets": float(init_c["rx_packets"]),
+            "app_tx": 0.0,
+            "app_rx": 0.0,
+            "reqs": 0.0,
+        })
         self._rtt_samples_us.clear()
         self._jitter_us = 0.0
         self._last_rtt_us = None
@@ -327,20 +333,11 @@ class InternetTrafficEngine:
     def sample_metrics(self) -> Dict[str, Any]:
         """Compute instantaneous and cumulative metrics from real OS NIC counters & live RTT probes."""
         now = time.time()
-        dt = max(0.05, now - self._prev_ts)
         curr = _read_iface_counters(self.interface)
-
-        d_tx_bytes = max(0, curr["tx_bytes"] - self._prev_counters.get("tx_bytes", curr["tx_bytes"]))
-        d_rx_bytes = max(0, curr["rx_bytes"] - self._prev_counters.get("rx_bytes", curr["rx_bytes"]))
-        d_tx_pkts = max(0, curr["tx_packets"] - self._prev_counters.get("tx_packets", curr["tx_packets"]))
-        d_rx_pkts = max(0, curr["rx_packets"] - self._prev_counters.get("rx_packets", curr["rx_packets"]))
 
         tot_tx_pkts = max(0, curr["tx_packets"] - self._start_counters.get("tx_packets", curr["tx_packets"]))
         tot_rx_pkts = max(0, curr["rx_packets"] - self._start_counters.get("rx_packets", curr["rx_packets"]))
         nic_drops = max(0, curr["drops"] - self._start_counters.get("drops", curr["drops"]))
-
-        self._prev_counters = curr
-        self._prev_ts = now
 
         with self._lock:
             rtts = sorted(self._rtt_samples_us)
@@ -348,9 +345,36 @@ class InternetTrafficEngine:
             sent_p = self._probes_sent
             lost_p = self._probes_lost
             reqs = self.completed_requests
-            d_reqs = max(0, reqs - self._prev_requests)
-            self._prev_requests = reqs
+            app_tx = self.app_tx_bytes
+            app_rx = self.app_rx_bytes
             act_conn = self.active_connections
+
+        snap = {
+            "ts": now,
+            "tx_bytes": float(curr["tx_bytes"]),
+            "rx_bytes": float(curr["rx_bytes"]),
+            "tx_packets": float(curr["tx_packets"]),
+            "rx_packets": float(curr["rx_packets"]),
+            "app_tx": float(app_tx),
+            "app_rx": float(app_rx),
+            "reqs": float(reqs),
+        }
+        self._counter_window.append(snap)
+        while len(self._counter_window) > 2 and (now - self._counter_window[0]["ts"]) > 1.35:
+            self._counter_window.popleft()
+
+        ref = self._counter_window[0]
+        dt = max(0.20, now - ref["ts"])
+        nic_tx_bps = max(0.0, (snap["tx_bytes"] - ref["tx_bytes"]) * 8.0 / dt)
+        nic_rx_bps = max(0.0, (snap["rx_bytes"] - ref["rx_bytes"]) * 8.0 / dt)
+        app_tx_bps = max(0.0, (snap["app_tx"] - ref["app_tx"]) * 8.0 / dt)
+        app_rx_bps = max(0.0, (snap["app_rx"] - ref["app_rx"]) * 8.0 / dt)
+
+        tx_bps = nic_tx_bps if nic_tx_bps > 0 else app_tx_bps
+        rx_bps = nic_rx_bps if nic_rx_bps > 0 else app_rx_bps
+        tx_pps = max(0.0, (snap["tx_packets"] - ref["tx_packets"]) / dt)
+        rx_pps = max(0.0, (snap["rx_packets"] - ref["rx_packets"]) / dt)
+        d_reqs = max(0.0, snap["reqs"] - ref["reqs"])
 
         if rtts:
             lat_min = rtts[0]
@@ -366,10 +390,10 @@ class InternetTrafficEngine:
         probe_loss_pct = ((lost_p / sent_p) * 100.0) if sent_p > 0 else 0.0
 
         return {
-            "tx_bps": (d_tx_bytes * 8.0) / dt,
-            "rx_bps": (d_rx_bytes * 8.0) / dt,
-            "tx_pps": d_tx_pkts / dt,
-            "rx_pps": d_rx_pkts / dt,
+            "tx_bps": tx_bps,
+            "rx_bps": rx_bps,
+            "tx_pps": tx_pps,
+            "rx_pps": rx_pps,
             "tx_packets": tot_tx_pkts,
             "rx_packets": tot_rx_pkts,
             "dropped_packets": nic_drops + lost_p,

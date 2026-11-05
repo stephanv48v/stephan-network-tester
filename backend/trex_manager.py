@@ -439,12 +439,13 @@ class TRexEngineManager:
         c_start, c_end, _ = compute_client_ip_range(cfg.get("src_ip_start", "16.0.0.1" if port_idx == 0 else "48.0.0.1"), users)
         d_start, d_end, _ = compute_client_ip_range(cfg.get("dst_ip_start", "48.0.0.1" if port_idx == 0 else "16.0.0.1"), min(1024, max(16, users // 10)))
 
+        ip_off = 18 if vlan_id > 0 else 14
         vm_cmds = [
             STLVmFlowVar(name="ip_src", min_value=c_start, max_value=c_end, size=4, op="inc"),
-            STLVmWrFlowVar(fv_name="ip_src", pkt_offset="IP.src"),
+            STLVmWrFlowVar(fv_name="ip_src", pkt_offset=ip_off + 12),
             STLVmFlowVar(name="ip_dst", min_value=d_start, max_value=d_end, size=4, op="inc"),
-            STLVmWrFlowVar(fv_name="ip_dst", pkt_offset="IP.dst"),
-            STLVmFixIpv4(offset="IP"),
+            STLVmWrFlowVar(fv_name="ip_dst", pkt_offset=ip_off + 16),
+            STLVmFixIpv4(offset=ip_off),
         ]
 
         mix = cfg.get("protocol_mix") or profile.get("protocol_mix")
