@@ -399,6 +399,29 @@ const InfraPages = {
         <div class="card"><div class="card-subtitle">Root Storage</div><div class="kpi-value">${f.storage?.used_gb ?? '—'} / ${f.storage?.total_gb ?? '—'} <span class="kpi-unit">GB</span></div><div class="kpi-foot">${f.storage?.percent != null ? f.storage.percent + '% used' : 'Unavailable'}</div></div>
       </div>
 
+      ${(() => {
+        const s = f.sensors || {};
+        if (!s.available) {
+          return `<div class="card" style="margin-bottom:16px;"><div class="card-header"><div class="card-title">&#127777; Temperatures, fans &amp; power</div></div>
+            <div style="font-size:12.5px;color:var(--text-secondary);">No sensor data yet (it refreshes every 15 seconds).</div></div>`;
+        }
+        const tile = (label, val, sub) => `<div class="sensor-tile"><div class="card-subtitle">${label}</div><div class="kpi-value" style="font-size:22px;">${val}</div><div class="kpi-foot">${sub || ''}</div></div>`;
+        const tiles = [
+          ...(s.cpu_packages || []).map((c) => tile(`${c.label} temperature`, App.tempSpan(c.c, 70, 85), c.high ? `High ${c.high}°C · critical ${c.critical}°C` : '')),
+          s.inlet_c != null ? tile('Inlet (room air)', App.tempSpan(s.inlet_c, 30, 35), 'From iDRAC — keep below ~27°C') : '',
+          s.exhaust_c != null ? tile('Exhaust air', App.tempSpan(s.exhaust_c, 50, 60), 'From iDRAC') : '',
+          s.nvme_c != null ? tile('NVMe drive', App.tempSpan(s.nvme_c, 60, 75), 'Composite sensor') : '',
+          ...(s.nics || []).map((n) => tile(`NIC ${App.esc(n.name)}`, App.tempSpan(n.c, 80, 95), 'Network card')),
+          s.chipset_c != null ? tile('Chipset (PCH)', App.tempSpan(s.chipset_c, 70, 85), '') : '',
+          s.fan_avg_rpm != null ? tile('Fans (average)', `${s.fan_avg_rpm.toLocaleString()} <span class="kpi-unit">RPM</span>`, (s.fans || []).map((x) => `${App.esc(x.name)}: ${x.rpm.toLocaleString()}`).join(' · ')) : '',
+          s.power_w != null ? tile('Power draw', `${s.power_w} <span class="kpi-unit">W</span>`, 'From iDRAC') : '',
+        ].filter(Boolean).join('');
+        return `<div class="card" style="margin-bottom:16px;">
+          <div class="card-header"><div class="card-title">&#127777; Temperatures, fans &amp; power</div>
+            <span class="card-subtitle">Updated ${s.updated_at ? new Date(s.updated_at * 1000).toLocaleTimeString() : '—'}</span></div>
+          <div class="sensor-grid">${tiles}</div></div>`;
+      })()}
+
       <div class="card" style="margin-bottom:16px;">
         <div class="card-header"><div class="card-title">32-Core Xeon Thread Utilisation</div></div>
         <div style="display:grid;grid-template-columns:repeat(8, minmax(0, 1fr));gap:8px;">${cores}</div>

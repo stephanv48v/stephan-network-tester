@@ -409,6 +409,9 @@ class UniFiTelemetryCollector:
             "gw_ip": gw0.get("ip"),
             "gw_cpu_pct": gw_cpu,
             "gw_mem_pct": gw_mem,
+            "gw_temp_c": None,  # the Integration API v1 doesn't expose temperatures
+            "gw_uptime_sec": gw0.get("uptime_sec"),
+            "gw_firmware": gw0.get("firmware"),
             "wan_rx_bps": wan_rx_bps,
             "wan_tx_bps": wan_tx_bps,
             "wan_latency_ms": None,
@@ -478,6 +481,16 @@ class UniFiTelemetryCollector:
             mem_pct = _safe_float(sys_stats.get("mem"))
             uptime = _safe_int(d.get("uptime"))
             num_sta = _safe_int(d.get("num_sta"))
+            # Gateways/switches report e.g. "temperatures": [{"name": "CPU", "type": "cpu", "value": 52.0}, ...]
+            temps_parsed = []
+            for t in d.get("temperatures") or []:
+                tv = _safe_float(t.get("value"))
+                if tv is not None:
+                    temps_parsed.append({"name": t.get("name") or t.get("type") or "Temp", "type": t.get("type"), "c": round(tv, 1)})
+            if not temps_parsed and _safe_float(d.get("general_temperature")) is not None:
+                temps_parsed.append({"name": "Device", "type": "board", "c": round(_safe_float(d.get("general_temperature")), 1)})
+            cpu_temp = next((t["c"] for t in temps_parsed if str(t.get("type") or t["name"]).lower() == "cpu"), None)
+            temp_c = cpu_temp if cpu_temp is not None else (max(t["c"] for t in temps_parsed) if temps_parsed else None)
 
             ports_parsed = []
             for p in d.get("port_table") or []:
@@ -535,6 +548,8 @@ class UniFiTelemetryCollector:
                 "cpu_pct": cpu_pct,
                 "mem_pct": mem_pct,
                 "uptime_sec": uptime,
+                "temperatures": temps_parsed,
+                "temp_c": temp_c,
                 "num_clients": num_sta,
                 "rx_bps": (_safe_float(d.get("rx_bytes-r")) or 0.0) * 8.0 if d.get("rx_bytes-r") is not None else None,
                 "tx_bps": (_safe_float(d.get("tx_bytes-r")) or 0.0) * 8.0 if d.get("tx_bytes-r") is not None else None,
@@ -585,6 +600,10 @@ class UniFiTelemetryCollector:
             "gw_ip": gw0.get("ip") or wan_health.get("wan_ip"),
             "gw_cpu_pct": gw0.get("cpu_pct"),
             "gw_mem_pct": gw0.get("mem_pct"),
+            "gw_temp_c": gw0.get("temp_c"),
+            "gw_temperatures": gw0.get("temperatures") or [],
+            "gw_uptime_sec": gw0.get("uptime_sec"),
+            "gw_firmware": gw0.get("firmware"),
             "wan_rx_bps": wan_rx_bps,
             "wan_tx_bps": wan_tx_bps,
             "wan_latency_ms": wan_lat,

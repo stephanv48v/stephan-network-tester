@@ -18,7 +18,7 @@ import csv
 import datetime
 import io
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from xml.sax.saxutils import escape as _esc
 
@@ -436,6 +436,73 @@ def _chart_correlation(samples: List[Dict[str, Any]]) -> io.BytesIO:
 
 
 # ---------------------------------------------------------------------------
+# Codeblue logo (same geometry as frontend/static/brand/codeblue-logo.svg, viewBox 396 x 112)
+# ---------------------------------------------------------------------------
+CODEBLUE_NAVY = colors.HexColor("#1B3F5E")
+CODEBLUE_LIGHT = colors.HexColor("#8CC8F4")
+LOGO_VB_W = 496.0
+
+
+def draw_codeblue_logo(c: Any, x: float, y: float, height: float, on_dark: bool = False, with_tagline: bool = True) -> float:
+    """Draw the codeblue logo (brand colours) with its bottom-left at (x, y). Returns the drawn width.
+    On dark backgrounds it sits on a white rounded plate, like the web UI."""
+    vb_h = 134.0 if with_tagline else 72.0
+    s = height / vb_h
+    top = y + height
+    if on_dark:
+        pad = 0.18 * height
+        c.saveState()
+        c.setFillColor(colors.white)
+        c.roundRect(x - pad, y - pad, LOGO_VB_W * s + 2 * pad, height + 2 * pad, 0.2 * height, stroke=0, fill=1)
+        c.restoreState()
+
+    def P(sx: float, sy: float) -> Tuple[float, float]:
+        return x + sx * s, top - sy * s
+
+    def arc(cx: float, cy: float, r: float, start: float, extent: float) -> None:
+        # reportlab angles are counter-clockwise in PDF space (y up)
+        px, py = P(cx, cy)
+        rr = r * s
+        p = c.beginPath()
+        p.arc(px - rr, py - rr, px + rr, py + rr, startAng=start, extent=extent)
+        c.drawPath(p, stroke=1, fill=0)
+
+    def line(x1: float, y1: float, x2: float, y2: float) -> None:
+        a, b = P(x1, y1)
+        d, e = P(x2, y2)
+        c.line(a, b, d, e)
+
+    c.saveState()
+    c.setLineCap(1)
+    c.setLineJoin(1)
+    c.setLineWidth(11 * s)
+    c.setStrokeColor(CODEBLUE_NAVY)
+    arc(25.5, 42, 20, 45, 270)                 # c
+    arc(163.5, 42, 20, 0, 360)                 # d bowl
+    line(183.5, 12.5, 183.5, 62)               # d stem
+    line(212.5, 42, 252.5, 42)                 # e bar
+    arc(232.5, 42, 20, 0, 320)                 # e
+    line(281.5, 12.5, 281.5, 62)               # b stem
+    arc(301.5, 42, 20, 0, 360)                 # b bowl
+    line(350.5, 12.5, 350.5, 62)               # l
+    line(379.5, 22, 379.5, 42)                 # u left
+    arc(399.5, 42, 20, 180, 180)               # u bottom
+    line(419.5, 22, 419.5, 62)                 # u right
+    line(448.5, 42, 488.5, 42)                 # e bar
+    arc(468.5, 42, 20, 0, 320)                 # e
+    c.setStrokeColor(CODEBLUE_LIGHT)
+    arc(94.5, 42, 20, 145, 250)                # o = power ring (gap at the top)
+    line(94.5, 12.5, 94.5, 45)                 # power line
+    if with_tagline:
+        c.setFillColor(CODEBLUE_NAVY)
+        c.setFont("Helvetica-Bold", 25 * s)
+        tx, ty = P(440, 125)
+        c.drawRightString(tx, ty, "IT services")
+    c.restoreState()
+    return LOGO_VB_W * s
+
+
+# ---------------------------------------------------------------------------
 # Reusable PDF Building Blocks (KPI Cards, Callouts, NumberedCanvas)
 # ---------------------------------------------------------------------------
 class _ReportNumberedCanvas(canvas.Canvas):
@@ -445,7 +512,7 @@ class _ReportNumberedCanvas(canvas.Canvas):
         super().__init__(*args, **kwargs)
         self._saved_page_states: List[Dict[str, Any]] = []
         self._run_label = run_label
-        self._footer_left = footer_left or "CISCO TRex + UniFi | RECORDED NETWORK PERFORMANCE REPORT"
+        self._footer_left = footer_left or "CODEBLUE IT SERVICES  |  NETWORK PERFORMANCE REPORT"
 
     def showPage(self) -> None:
         self._saved_page_states.append(dict(self.__dict__))
@@ -475,6 +542,11 @@ class _ReportNumberedCanvas(canvas.Canvas):
             self.setFont("Helvetica-Bold", 7.5)
             self.drawString(20 * mm, h - 25.4 * mm, self._run_label[:28])
 
+            # Codeblue logo, top-right of the cover hero
+            logo_h = 14 * mm
+            logo_w = 496.0 / 134.0 * logo_h
+            draw_codeblue_logo(self, w - 16 * mm - logo_w, h - 14 * mm - logo_h, logo_h, on_dark=True)
+
             # Cover Title
             self.setFont("Helvetica-Bold", 26)
             self.drawString(16 * mm, h - 44 * mm, "NETWORK")
@@ -502,10 +574,14 @@ class _ReportNumberedCanvas(canvas.Canvas):
         self.drawString(16 * mm, h - 10.5 * mm, "NETWORK PERFORMANCE REPORT")
         self.setFillColor(colors.HexColor("#94A3B8"))
         self.setFont("Helvetica", 8)
-        self.drawString(16 * mm, h - 16.5 * mm, "Cisco TRex traffic generation  /  UniFi infrastructure telemetry")
+        self.drawString(16 * mm, h - 16.5 * mm, "Codeblue IT Services  /  TRex traffic generation  /  UniFi telemetry")
+        # Small codeblue wordmark on the right, run label underneath it
+        logo_h = 5.5 * mm
+        logo_w = 496.0 / 72.0 * logo_h
+        draw_codeblue_logo(self, w - 16 * mm - logo_w, h - 6 * mm - logo_h, logo_h, on_dark=True, with_tagline=False)
         self.setFillColor(colors.HexColor("#DBEAFE"))
-        self.setFont("Helvetica-Bold", 8)
-        self.drawRightString(w - 16 * mm, h - 13.5 * mm, self._run_label)
+        self.setFont("Helvetica-Bold", 7.5)
+        self.drawRightString(w - 16 * mm, h - 19.5 * mm, self._run_label)
 
         # Content Pages Footer
         self.setStrokeColor(BORDER)
@@ -705,7 +781,8 @@ def generate_pdf_bytes(
         rightMargin=16 * mm,
         topMargin=30 * mm,
         bottomMargin=20 * mm,
-        title=custom_title or f"Cisco TRex Network Performance Report — Run #{run_id}",
+        title=custom_title or f"Codeblue Network Performance Report — Run #{run_id}",
+        author="Codeblue IT Services",
     )
 
     styles = getSampleStyleSheet()
@@ -722,7 +799,7 @@ def generate_pdf_bytes(
     # PAGE 1: COVER PAGE
     # =========================================================================
     story.append(Spacer(1, 60 * mm))
-    banner_title = custom_title or f"Cisco TRex + {dut_name}"
+    banner_title = custom_title or f"Network Performance Test — {dut_name}"
     banner_sub = f"{sim_users:,} simulated enterprise users  |  Target {_fmt_bps(target_bps)}  |  {run.get('profile_name', 'Enterprise Mix')}"
     cover_card = Table(
         [[Paragraph(
@@ -845,7 +922,7 @@ def generate_pdf_bytes(
             canvasmaker=lambda *a, **kw: _ReportNumberedCanvas(
                 *a,
                 run_label=f"EXECUTIVE REPORT  |  RUN #{run_id}",
-                footer_left=f"CISCO TRex + UniFi  |  RUN #{run_id} EXECUTIVE SUMMARY",
+                footer_left=f"CODEBLUE IT SERVICES  |  RUN #{run_id} EXECUTIVE SUMMARY",
                 **kw,
             ),
         )
@@ -1113,7 +1190,7 @@ def generate_pdf_bytes(
         canvasmaker=lambda *a, **kw: _ReportNumberedCanvas(
             *a,
             run_label=f"RUN #{run_id}  |  {verdict}",
-            footer_left=f"CISCO TRex + UniFi  |  RUN #{run_id} — {dut_name.upper()[:38]}",
+            footer_left=f"CODEBLUE IT SERVICES  |  RUN #{run_id} — {dut_name.upper()[:38]}",
             **kw,
         ),
     )
@@ -1219,7 +1296,7 @@ def generate_comparison_pdf_bytes(comp: Dict[str, Any]) -> bytes:
         canvasmaker=lambda *a, **kw: _ReportNumberedCanvas(
             *a,
             run_label=f"COMPARISON  |  #{ra['id']} VS #{rb['id']}",
-            footer_left=f"CISCO TRex + UniFi  |  COMPARISON REPORT #{ra['id']} VS #{rb['id']}",
+            footer_left=f"CODEBLUE IT SERVICES  |  COMPARISON REPORT #{ra['id']} VS #{rb['id']}",
             **kw,
         ),
     )

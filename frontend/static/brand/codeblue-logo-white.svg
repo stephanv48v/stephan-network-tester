@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 134" role="img" aria-label="codeblue IT services">
+  <title>codeblue IT services (reversed, for dark backgrounds)</title>
+  <g fill="none" stroke-width="11" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#FFFFFF">
+      <path d="M39.64 27.86 A20 20 0 1 0 39.64 56.14"/>
+      <circle cx="163.5" cy="42" r="20"/>
+      <path d="M183.5 12.5 V62"/>
+      <path d="M212.5 42 H252.5 A20 20 0 1 0 247.82 54.86"/>
+      <path d="M281.5 12.5 V62"/>
+      <circle cx="301.5" cy="42" r="20"/>
+      <path d="M350.5 12.5 V62"/>
+      <path d="M379.5 22 V42 A20 20 0 0 0 419.5 42 V22 M419.5 42 V62"/>
+      <path d="M448.5 42 H488.5 A20 20 0 1 0 483.82 54.86"/>    </g>
+    <g stroke="#8CC8F4">
+      <path d="M110.88 30.53 A20 20 0 1 1 78.12 30.53"/>
+      <path d="M94.5 12.5 V45"/>    </g>
+  </g>
+  <text x="440" y="125" text-anchor="end" fill="#FFFFFF" font-family="'Segoe UI', 'Open Sans', Arial, sans-serif" font-size="26" font-weight="600">IT services</text>
+</svg>

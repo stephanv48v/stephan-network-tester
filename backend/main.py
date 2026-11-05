@@ -34,6 +34,7 @@ from snmp_collector import snmp_collector
 from trex_manager import engine
 from unifi_collector import unifi_collector
 from capacity_finder import capacity_finder
+import sensors as hw_sensors
 
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
@@ -116,12 +117,19 @@ def _cron_matches_now(cron_expr: str, now_dt: datetime.datetime) -> bool:
     return True
 
 
+def _with_sensors(frame: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Attach the cached R640 hardware sensor snapshot (temps, fans, power) to a telemetry frame."""
+    if not frame:
+        return frame
+    return {**frame, "sensors": hw_sensors.latest()}
+
+
 async def telemetry_loop() -> None:
     """250ms high-frequency telemetry loop streaming real measurements to WebSocket clients."""
     while True:
         try:
             frame = await asyncio.to_thread(engine.tick_telemetry)
-            await ws_manager.broadcast(frame)
+            await ws_manager.broadcast(_with_sensors(frame))
         except Exception:
             pass
         await asyncio.sleep(0.25)
@@ -179,6 +187,7 @@ async def scheduler_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    hw_sensors.start_background()
     await asyncio.to_thread(engine.try_connect_trex)
     await asyncio.to_thread(unifi_collector.poll_once, None, False)
     await asyncio.to_thread(snmp_collector.poll_once, None, False)
@@ -356,7 +365,7 @@ async def websocket_telemetry(ws: WebSocket):
     await ws_manager.connect(ws)
     try:
         if engine.latest_telemetry:
-            await ws.send_text(json.dumps(engine.latest_telemetry))
+            await ws.send_text(json.dumps(_with_sensors(engine.latest_telemetry)))
         while True:
             msg_text = await ws.receive_text()
             try:
@@ -378,7 +387,7 @@ async def websocket_telemetry(ws: WebSocket):
 # ---------------------------------------------------------------------------
 @app.get("/api/status")
 async def get_status():
-    return engine.latest_telemetry or await asyncio.to_thread(engine.tick_telemetry)
+    return _with_sensors(engine.latest_telemetry or await asyncio.to_thread(engine.tick_telemetry))
 
 
 @app.get("/api/profiles")

@@ -463,6 +463,72 @@ const App = {
     }
   },
 
+  // Colour a temperature: green / amber / red. Limits differ per sensor.
+  tempSpan(c, warn = 70, hot = 85) {
+    if (c === null || c === undefined || Number.isNaN(Number(c))) return '';
+    const v = Number(c);
+    const cls = v >= hot ? 'hot' : v >= warn ? 'warm' : 'ok';
+    return `<span class="temp ${cls}">${v.toFixed(0)}°C</span>`;
+  },
+
+  pctSpan(label, v, warn = 75, hot = 90) {
+    if (v === null || v === undefined) return '';
+    const n = Number(v);
+    const cls = n >= hot ? 'hot' : n >= warn ? 'warm' : '';
+    return `${label} <strong class="${cls}">${n.toFixed(0)}%</strong>`;
+  },
+
+  updateHealthChips(f) {
+    // --- R640 server ---
+    const s = f.sensors || {};
+    const srv = document.getElementById('hdrServerSub');
+    if (srv) {
+      const parts = [this.pctSpan('CPU', f.cpu_pct), this.pctSpan('RAM', f.ram_pct)];
+      if (s.cpu_max_c != null) parts.push(this.tempSpan(s.cpu_max_c, 70, 85));
+      srv.innerHTML = parts.filter(Boolean).join(' · ') || '—';
+      const tip = [
+        `CPU ${Number(f.cpu_pct || 0).toFixed(0)}% · RAM ${Number(f.ram_pct || 0).toFixed(0)}%${f.ram_total_gb ? ` of ${Math.round(f.ram_total_gb)} GB` : ''}`,
+        f.storage && f.storage.percent != null ? `Disk ${f.storage.percent}% used` : '',
+        ...(s.cpu_packages || []).map((c) => `${c.label} temp ${c.c}°C`),
+        s.inlet_c != null ? `Inlet (room) ${s.inlet_c}°C` : '',
+        s.exhaust_c != null ? `Exhaust ${s.exhaust_c}°C` : '',
+        s.nvme_c != null ? `NVMe drive ${s.nvme_c}°C` : '',
+        ...(s.nics || []).map((n) => `NIC ${n.name} ${n.c}°C`),
+        s.fan_avg_rpm != null ? `Fans avg ${s.fan_avg_rpm.toLocaleString()} RPM` : '',
+        s.power_w != null ? `Power ${s.power_w} W` : '',
+      ].filter(Boolean);
+      document.getElementById('hdrServerChip').title = `${tip.join('\n')}\n\nClick for full server health`;
+      const hot = (s.cpu_max_c != null && s.cpu_max_c >= 85) || (s.inlet_c != null && s.inlet_c >= 35);
+      document.getElementById('hdrServerChip').classList.toggle('chip-alert', !!hot);
+    }
+
+    // --- UniFi gateway (EFG): only when the UniFi API is connected ---
+    const efg = document.getElementById('hdrEfgChip');
+    if (efg) {
+      const u = f.unifi_summary || {};
+      const show = !!f.unifi_connected && (u.gw_name || u.gw_cpu_pct != null);
+      efg.style.display = show ? '' : 'none';
+      if (show) {
+        document.getElementById('hdrEfgName').textContent = u.gw_model ? `${u.gw_model}` : (u.gw_name || 'Gateway');
+        const parts = [this.pctSpan('CPU', u.gw_cpu_pct), this.pctSpan('RAM', u.gw_mem_pct)];
+        if (u.gw_temp_c != null) parts.push(this.tempSpan(u.gw_temp_c, 75, 90));
+        if (!u.gw_online) parts.unshift('<strong class="hot">offline</strong>');
+        document.getElementById('hdrEfgSub').innerHTML = parts.filter(Boolean).join(' · ') || 'connected';
+        const up = u.gw_uptime_sec ? `${Math.floor(u.gw_uptime_sec / 86400)}d ${Math.floor((u.gw_uptime_sec % 86400) / 3600)}h` : null;
+        efg.title = [
+          u.gw_name, u.gw_model, u.gw_ip, u.gw_firmware ? `Firmware ${u.gw_firmware}` : '',
+          u.gw_cpu_pct != null ? `CPU ${Number(u.gw_cpu_pct).toFixed(0)}%` : '', u.gw_mem_pct != null ? `RAM ${Number(u.gw_mem_pct).toFixed(0)}%` : '',
+          ...(u.gw_temperatures || []).map((t) => `${t.name} ${t.c}°C`),
+          u.wan_rx_bps != null ? `WAN ↓ ${this.fmtBps(u.wan_rx_bps)} ↑ ${this.fmtBps(u.wan_tx_bps || 0)}` : '',
+          u.wan_latency_ms != null ? `WAN latency ${u.wan_latency_ms} ms` : '',
+          u.active_sessions != null ? `${Number(u.active_sessions).toLocaleString()} firewall sessions` : '',
+          up ? `Up ${up}` : '',
+        ].filter(Boolean).join('\n') + '\n\nClick for UniFi details';
+        efg.classList.toggle('chip-alert', !u.gw_online || (u.gw_cpu_pct != null && u.gw_cpu_pct >= 90) || (u.gw_temp_c != null && u.gw_temp_c >= 90));
+      }
+    }
+  },
+
   updateHeaderBar(f) {
     const dot = document.getElementById('hdrTrexDot');
     const sub = document.getElementById('hdrTrexSub');
@@ -476,6 +542,7 @@ const App = {
     if (stopBtn) stopBtn.style.display = f.running ? 'inline-flex' : 'none';
     const liveDot = document.getElementById('navLiveDot');
     if (liveDot) liveDot.classList.toggle('on', !!f.running);
+    this.updateHealthChips(f);
 
     const alerts = f.alerts || [];
     const alertBadge = document.getElementById('hdrAlertCount');

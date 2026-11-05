@@ -888,3 +888,29 @@ input[type="range"] {
   border: 1px solid var(--border-color); border-radius: 999px; background: var(--bg-subtle); color: var(--text-secondary);
 }
 .chip-btn:hover { border-color: var(--primary); color: var(--primary); background: var(--info-bg); }
+
+/* ==========================================================================
+   Codeblue branding + top-bar health chips
+   ========================================================================== */
+:root {
+  --sidebar-bg: #133552;
+  --sidebar-hover: #1C4569;
+  --brand-navy: #183F5E;
+  --brand-light: #7CC2F4;
+}
+.sidebar-brand.codeblue-brand { flex-direction: column; align-items: flex-start; gap: 4px; padding: 18px 20px 14px; }
+.logo-plate { background: #FFFFFF; border-radius: 10px; padding: 9px 12px 7px; box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
+.brand-logo { width: 160px; height: auto; display: block; }
+.codeblue-brand .brand-text-sub { color: #9FC9EE; letter-spacing: 0.04em; padding-left: 2px; }
+
+.health-chip { cursor: pointer; }
+.health-chip.chip-alert { border-color: var(--critical-border); background: var(--critical-bg); }
+.health-metrics { white-space: nowrap; }
+.health-metrics strong.warm, .temp.warm { color: var(--warning); }
+.health-metrics strong.hot, .temp.hot { color: var(--critical); }
+.temp { font-weight: 700; }
+.temp.ok { color: var(--success); }
+@media (max-width: 1250px) { #hdrEfgChip, #hdrServerChip .status-chip-label { display: none; } }
+
+.sensor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.sensor-tile { background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: var(--radius-ctrl); padding: 10px 12px; }

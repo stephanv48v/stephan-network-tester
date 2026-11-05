@@ -3,12 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Network Test Studio — R640</title>
+  <title>Codeblue Network Test Studio</title>
+  <link rel="icon" type="image/svg+xml" href="/static/brand/codeblue-mark.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=5.0" />
+  <link rel="stylesheet" href="/static/styles.css?v=5.2" />
 </head>
 <body>
   <div class="app-shell">
@@ -16,14 +17,9 @@
          SIDEBAR — 6 sections. Each section has tabs at the top of the page.
          ================================================================== -->
     <aside class="sidebar">
-      <div class="sidebar-brand">
-        <div class="cisco-bars" aria-hidden="true">
-          <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-        </div>
-        <div>
-          <div class="brand-text-title">Network Tester</div>
-          <div class="brand-text-sub">TRex Test Studio</div>
-        </div>
+      <div class="sidebar-brand codeblue-brand">
+        <div class="logo-plate"><img src="/static/brand/codeblue-logo.svg" alt="codeblue IT services" class="brand-logo" /></div>
+        <div class="brand-text-sub">Network Test Studio</div>
       </div>
 
       <nav class="sidebar-nav" id="sidebarNav">
@@ -77,6 +73,22 @@
           <button class="btn btn-danger btn-sm" id="hdrEmergencyStop" style="display:none;" onclick="App.stopActiveTest('emergency_stopped')">
             &#9632; Stop Test
           </button>
+
+          <div class="status-chip health-chip" id="hdrServerChip" onclick="App.navigate('server-health')" title="Server health">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#183F5E" stroke-width="2"><rect x="2" y="3" width="20" height="7" rx="1"/><rect x="2" y="14" width="20" height="7" rx="1"/><circle cx="6" cy="6.5" r="1"/><circle cx="6" cy="17.5" r="1"/></svg>
+            <div>
+              <div class="status-chip-label">R640 Server</div>
+              <div class="status-chip-sub health-metrics" id="hdrServerSub">—</div>
+            </div>
+          </div>
+
+          <div class="status-chip health-chip" id="hdrEfgChip" style="display:none;" onclick="App.navigate('unifi-monitoring')" title="UniFi gateway (EFG)">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#183F5E" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4z"/></svg>
+            <div>
+              <div class="status-chip-label" id="hdrEfgName">EFG</div>
+              <div class="status-chip-sub health-metrics" id="hdrEfgSub">—</div>
+            </div>
+          </div>
 
           <div class="status-chip" onclick="App.navigate('trex-engine')" style="cursor:pointer;" title="TRex engine status">
             <span class="status-chip-dot offline" id="hdrTrexDot"></span>
@@ -288,8 +300,8 @@
 
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="/static/app.js?v=5.0"></script>
-  <script src="/static/pages_studio.js?v=5.0"></script>
-  <script src="/static/pages_infra.js?v=5.0"></script>
+  <script src="/static/app.js?v=5.2"></script>
+  <script src="/static/pages_studio.js?v=5.2"></script>
+  <script src="/static/pages_infra.js?v=5.2"></script>
 </body>
 </html>
