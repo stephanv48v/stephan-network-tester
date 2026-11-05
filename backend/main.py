@@ -33,6 +33,7 @@ from scripts.discover_hardware import discover_interfaces, generate_trex_cfg
 from snmp_collector import snmp_collector
 from trex_manager import engine
 from unifi_collector import unifi_collector
+from capacity_finder import capacity_finder
 
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
@@ -155,7 +156,7 @@ async def scheduler_loop() -> None:
                         if (now - last_ran) > 55:
                             should_trigger = True
 
-                if should_trigger and not engine.running and not _sweep_lock.locked():
+                if should_trigger and not engine.running and not _sweep_lock.locked() and not capacity_finder.running:
                     req = {
                         "name": f"[Scheduled] {job.get('name')}",
                         "profile_id": job.get("profile_id", "imix"),
@@ -198,6 +199,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=False,  # never combine credentials with "*": the session cookie must stay same-origin
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -216,8 +218,141 @@ async def serve_dashboard():
     return HTMLResponse("<h1>Cisco TRex Network Test Studio Loading...</h1>", status_code=200)
 
 
+# ---------------------------------------------------------------------------
+# Authentication — single admin login (logic lives in auth.py)
+#   Middleware: everything except /login, /api/auth/{status,setup,login,logout}, /static/* and /favicon.ico
+#   needs a valid "nts_session" cookie. /api/* -> 401 JSON, pages -> 302 /login.
+#   The /ws/telemetry websocket is checked separately inside its handler (HTTP middleware never sees it).
+# ---------------------------------------------------------------------------
+import auth as nts_auth  # noqa: E402
+from fastapi import Request  # noqa: E402
+from fastapi.responses import JSONResponse, RedirectResponse  # noqa: E402
+
+LOGIN_HTML_PATH = FRONTEND_DIR / "login.html"
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _too_many_attempts(wait_sec: int) -> JSONResponse:
+    mins = max(1, (wait_sec + 59) // 60)
+    return JSONResponse(
+        {"detail": f"Too many failed attempts. Try again in {mins} minute{'s' if mins != 1 else ''}."},
+        status_code=429,
+        headers={"Retry-After": str(wait_sec)},
+    )
+
+
+async def _issue_session(body: Dict[str, Any]) -> JSONResponse:
+    resp = JSONResponse(body)
+    nts_auth.set_session_cookie(resp, await asyncio.to_thread(nts_auth.create_session_token))
+    return resp
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    if nts_auth.is_public_path(path):
+        return await call_next(request)
+    if await asyncio.to_thread(nts_auth.is_authenticated, request.cookies):
+        return await call_next(request)
+    if path.startswith("/api/"):
+        return JSONResponse({"detail": "Not logged in"}, status_code=401)
+    return RedirectResponse("/login", status_code=302)
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def serve_login():
+    return HTMLResponse(
+        content=LOGIN_HTML_PATH.read_text(encoding="utf-8"),
+        status_code=200,
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/api/auth/status")
+async def auth_status(request: Request):
+    return {
+        "password_set": await asyncio.to_thread(nts_auth.is_password_set),
+        "logged_in": await asyncio.to_thread(nts_auth.is_authenticated, request.cookies),
+    }
+
+
+@app.post("/api/auth/setup")
+async def auth_setup(payload: Dict[str, Any], request: Request):
+    if await asyncio.to_thread(nts_auth.is_password_set):
+        raise HTTPException(status_code=409, detail="An admin password is already set")
+    password = payload.get("password")
+    problem = nts_auth.password_problem(password)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+    if not await asyncio.to_thread(nts_auth.setup_password, password):
+        raise HTTPException(status_code=409, detail="An admin password is already set")
+    await asyncio.to_thread(db.log_audit, "Security", "Admin Password Created", "admin", f"From {_client_ip(request)}", "admin")
+    return await _issue_session({"status": "ok"})
+
+
+@app.post("/api/auth/login")
+async def auth_login(payload: Dict[str, Any], request: Request):
+    ip = _client_ip(request)
+    wait = nts_auth.retry_after_seconds(ip)
+    if wait:
+        return _too_many_attempts(wait)
+    if not await asyncio.to_thread(nts_auth.is_password_set):
+        raise HTTPException(status_code=409, detail="No admin password has been set yet")
+    if not await asyncio.to_thread(nts_auth.verify_password, payload.get("password")):
+        nts_auth.record_failure(ip)
+        await asyncio.to_thread(db.log_audit, "Security", "Login Failed", "admin", f"From {ip}", "admin")
+        raise HTTPException(status_code=401, detail="Wrong password")
+    nts_auth.clear_failures(ip)
+    await asyncio.to_thread(db.log_audit, "Security", "Signed In", "admin", f"From {ip}", "admin")
+    return await _issue_session({"status": "ok"})
+
+
+@app.post("/api/auth/logout")
+async def auth_logout():
+    resp = JSONResponse({"status": "logged_out"})
+    nts_auth.clear_session_cookie(resp)
+    return resp
+
+
+@app.post("/api/auth/change-password")
+async def auth_change_password(payload: Dict[str, Any], request: Request):
+    if not await asyncio.to_thread(nts_auth.is_authenticated, request.cookies):
+        raise HTTPException(status_code=401, detail="Not logged in")
+    ip = _client_ip(request)
+    wait = nts_auth.retry_after_seconds(ip)
+    if wait:
+        return _too_many_attempts(wait)
+    if not await asyncio.to_thread(nts_auth.verify_password, payload.get("current_password")):
+        nts_auth.record_failure(ip)
+        await asyncio.to_thread(db.log_audit, "Security", "Password Change Failed", "admin", f"Wrong current password from {ip}", "admin")
+        # 403 (not 401) so the UI's api() helper doesn't bounce the user to /login
+        raise HTTPException(status_code=403, detail="Current password is incorrect")
+    new_password = payload.get("new_password")
+    problem = nts_auth.password_problem(new_password)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+    await asyncio.to_thread(nts_auth.change_password, new_password)
+    nts_auth.clear_failures(ip)
+    await asyncio.to_thread(db.log_audit, "Security", "Admin Password Changed", "admin", f"From {ip}; all other sessions signed out", "admin")
+    return await _issue_session({"status": "changed"})
+
+
+# ---------------------------------------------------------------------------
+# WebSocket telemetry
+# ---------------------------------------------------------------------------
 @app.websocket("/ws/telemetry")
 async def websocket_telemetry(ws: WebSocket):
+    if not (
+        nts_auth.websocket_origin_ok(ws.headers)
+        and await asyncio.to_thread(nts_auth.is_authenticated, ws.cookies)
+    ):
+        # Accept first so the browser actually receives close code 4401 (a pre-accept close becomes HTTP 403 / 1006)
+        await ws.accept()
+        await ws.close(code=4401)
+        return
     await ws_manager.connect(ws)
     try:
         if engine.latest_telemetry:
@@ -305,6 +440,8 @@ async def precheck_test(payload: Dict[str, Any]):
 async def start_test(payload: Dict[str, Any]):
     if _sweep_lock.locked():
         raise HTTPException(status_code=409, detail="A frame-size sweep is currently running; wait for it to finish")
+    if capacity_finder.running:
+        raise HTTPException(status_code=409, detail="The breaking-point finder is running; stop it first")
     return await asyncio.to_thread(engine.start_test, payload)
 
 
@@ -837,6 +974,153 @@ async def configure_trex(payload: Dict[str, Any]):
 
 
 # ---------------------------------------------------------------------------
+# Breaking-point finder, re-run, trends & nightly internet check
+# ---------------------------------------------------------------------------
+@app.post("/api/capacity/start")
+async def capacity_start(payload: Optional[Dict[str, Any]] = None):
+    if _sweep_lock.locked():
+        raise HTTPException(status_code=409, detail="A frame-size sweep is running; wait for it to finish")
+    if engine.running:
+        raise HTTPException(status_code=409, detail="A test is running; stop it first")
+    res = await asyncio.to_thread(capacity_finder.start, engine, payload or {})
+    if res.get("status") != "started":
+        raise HTTPException(status_code=400, detail=res.get("error") or "Could not start")
+    return res
+
+
+@app.post("/api/capacity/stop")
+async def capacity_stop():
+    return await asyncio.to_thread(capacity_finder.stop, engine)
+
+
+@app.get("/api/capacity/status")
+async def capacity_status():
+    return await asyncio.to_thread(capacity_finder.status)
+
+
+# Fields copied from a finished run's config so a re-run is the same test
+_RERUN_CONFIG_KEYS = (
+    "traffic_engine", "test_mode", "target_gbps", "frame_size", "vlan_id", "dscp", "src_ip_start",
+    "dst_ip_start", "ramp_up_sec", "steady_sec", "ramp_down_sec", "ramp_steps_pct", "ramp_step_sec",
+    "internet_options", "dut_name", "client_name", "operator_name", "direction", "link_capacity_mbps",
+)
+
+
+def _base_test_name(name: str) -> str:
+    n = (name or "").strip()
+    for prefix in ("[Scheduled] ",):
+        if n.startswith(prefix):
+            n = n[len(prefix):]
+    while n.endswith(" (re-run)"):
+        n = n[: -len(" (re-run)")]
+    return n
+
+
+@app.post("/api/runs/{run_id}/rerun")
+async def rerun_test(run_id: int):
+    """Start the exact same test again (e.g. after a firmware upgrade) for a before/after comparison."""
+    if _sweep_lock.locked() or capacity_finder.running:
+        raise HTTPException(status_code=409, detail="Another automated test is running")
+    run = await asyncio.to_thread(db.get_test_run, run_id, False)
+    if not run:
+        raise HTTPException(status_code=404, detail="Test run not found")
+    if run.get("test_mode") == "rfc2544_sweep":
+        raise HTTPException(status_code=400, detail="Re-run frame-size sweeps from the Benchmark tab")
+    cfg = run.get("config") or {}
+    req: Dict[str, Any] = {k: cfg[k] for k in _RERUN_CONFIG_KEYS if cfg.get(k) is not None}
+    if cfg.get("profile_id") == "custom" or run.get("profile_id") == "custom":
+        req["protocol_mix"] = cfg.get("protocol_mix")
+    req.update({
+        "name": f"{_base_test_name(run.get('name', ''))} (re-run)",
+        "profile_id": run.get("profile_id") or cfg.get("profile_id") or "imix",
+        "simulated_users": run.get("simulated_users") or 1000,
+        "simulated_devices": run.get("simulated_devices") or 2000,
+        "duration_sec": cfg.get("steady_sec") or run.get("duration_sec") or 60,
+        "rerun_of": run_id,
+    })
+    if isinstance(run.get("thresholds"), dict):
+        req["thresholds"] = run["thresholds"]
+    res = await asyncio.to_thread(engine.start_test, req)
+    if not res.get("run_id"):
+        raise HTTPException(status_code=503, detail=res.get("error") or "Test could not start")
+    await asyncio.to_thread(db.log_audit, "Test History", "Re-ran Test", f"Run #{run_id} -> #{res['run_id']}", req["name"])
+    return res
+
+
+@app.get("/api/runs/{run_id}/previous")
+async def previous_run_of_same_test(run_id: int):
+    """Find the most recent earlier run of the same test (same base name, profile and engine)."""
+    run = await asyncio.to_thread(db.get_test_run, run_id, False)
+    if not run:
+        raise HTTPException(status_code=404, detail="Test run not found")
+    base = _base_test_name(run.get("name", ""))
+    for r in await asyncio.to_thread(db.list_test_runs, 500):
+        if int(r["id"]) >= run_id:
+            continue
+        if (_base_test_name(r.get("name", "")) == base and r.get("profile_id") == run.get("profile_id")
+                and r.get("traffic_engine") == run.get("traffic_engine")):
+            return {"run_id": int(r["id"]), "name": r.get("name")}
+    raise HTTPException(status_code=404, detail="No earlier run of this test found")
+
+
+@app.get("/api/trends")
+async def get_trends(engine_type: str = Query("internet_wan"), days: int = Query(30, ge=1, le=365)):
+    """Daily history of one kind of test, oldest first — used for the internet quality trend chart."""
+    cutoff = time.time() - days * 86400
+    runs = await asyncio.to_thread(db.list_test_runs, 500)
+    points = []
+    for r in runs:
+        if r.get("traffic_engine") != engine_type or float(r.get("started_at") or 0) < cutoff:
+            continue
+        s = r.get("summary") or {}
+        if not s.get("sample_count"):
+            continue
+        points.append({
+            "run_id": r["id"],
+            "name": r.get("name"),
+            "started_at": r.get("started_at"),
+            "scheduled": str(r.get("name", "")).startswith("[Scheduled]"),
+            "avg_rx_bps": s.get("avg_rx_bps"),
+            "max_rx_bps": s.get("max_rx_bps"),
+            "avg_tx_bps": s.get("avg_tx_bps"),
+            "lat_avg_us": s.get("lat_avg_us"),
+            "jitter_avg_us": s.get("jitter_avg_us"),
+            "drop_pct": s.get("drop_pct"),
+            "verdict": s.get("verdict") or r.get("verdict"),
+        })
+    points.sort(key=lambda p: p["started_at"] or 0)
+    return {"engine": engine_type, "days": days, "points": points}
+
+
+@app.post("/api/schedules/nightly-internet")
+async def add_nightly_internet_check(payload: Optional[Dict[str, Any]] = None):
+    """One-click: schedule a 60 s internet speed & quality test every night."""
+    p = payload or {}
+    try:
+        hour = max(0, min(23, int(p.get("hour", 2))))
+        minute = max(0, min(59, int(p.get("minute", 0))))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="hour/minute must be numbers")
+    name = "Nightly internet check"
+    existing = await asyncio.to_thread(db.list_scheduled_jobs)
+    if any(j.get("name") == name for j in existing):
+        raise HTTPException(status_code=409, detail="A nightly internet check is already scheduled (see Run a Test → Schedule)")
+    job_id = await asyncio.to_thread(db.create_scheduled_job, {
+        "name": name,
+        "cron_expr": f"{minute} {hour} * * *",
+        "profile_id": "internet_wan_mix",
+        "test_mode": "timed",
+        "duration_sec": 60,
+        "simulated_users": 500,
+        "simulated_devices": 1000,
+        # Ask for 1 Gbps; the engine caps it at 85% of the management link so SSH/UI stay usable
+        "config": {"traffic_engine": "internet_wan", "target_gbps": 1.0, "steady_sec": 60},
+    })
+    await asyncio.to_thread(db.log_audit, "Test Scheduler", "Created Nightly Internet Check", name, f"{hour:02d}:{minute:02d} daily")
+    return {"id": job_id, "status": "created", "cron_expr": f"{minute} {hour} * * *"}
+
+
+# ---------------------------------------------------------------------------
 # Schedules, Settings, User Access & Audit Logs
 # ---------------------------------------------------------------------------
 @app.get("/api/schedules")
@@ -957,8 +1241,8 @@ async def diag_pcap(interface: str = Query("enp216s0"), count: int = Query(150))
 def git_status():  # sync def => FastAPI runs it in the threadpool; blocking subprocess calls no longer stall the event loop
     repo_dir = "/opt/stephan-network-tester"
     try:
-        sha = subprocess.run(["git", "-C", repo_dir, "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=4).stdout.strip()
-        msg = subprocess.run(["git", "-C", repo_dir, "log", "-1", "--pretty=%s"], capture_output=True, text=True, timeout=4).stdout.strip()
+        sha = subprocess.run(["git", "-c", f"safe.directory={repo_dir}", "-C", repo_dir, "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=4).stdout.strip()
+        msg = subprocess.run(["git", "-c", f"safe.directory={repo_dir}", "-C", repo_dir, "log", "-1", "--pretty=%s"], capture_output=True, text=True, timeout=4).stdout.strip()
         auto_active = subprocess.run(["systemctl", "is-active", "stephan-auto-deploy.service"], capture_output=True, text=True, timeout=3).stdout.strip()
         return {"commit": sha or "main", "message": msg, "auto_deploy_service": auto_active or "active"}
     except Exception as e:

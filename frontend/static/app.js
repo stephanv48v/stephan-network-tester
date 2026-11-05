@@ -22,7 +22,7 @@ const SECTIONS = {
   home: { title: 'Home', sub: 'Status at a glance and one-click tests', routes: ['dashboard'] },
   run: { title: 'Run a Test', sub: 'Pick a test type, set it up and start it', routes: ['quick-test', 'application-simulation', 'traffic-mix-builder', 'stress-soak', 'rfc2544-benchmark', 'traffic-profiles', 'test-scheduler'] },
   live: { title: 'Live View', sub: 'Watch the running test in real time', routes: ['live-monitoring'] },
-  results: { title: 'Results & Reports', sub: 'Past tests, side-by-side comparison and PDF reports', routes: ['test-history', 'compare-tests', 'reports-exports'] },
+  results: { title: 'Results & Reports', sub: 'Past tests, side-by-side comparison and PDF reports', routes: ['test-history', 'compare-tests', 'trends', 'reports-exports'] },
   network: { title: 'My Network', sub: 'UniFi devices, topology and server ports', routes: ['unifi-monitoring', 'network-topology', 'nics-ports'] },
   system: { title: 'System & Settings', sub: 'Server health, TRex engine, integrations and settings', routes: ['server-health', 'trex-engine', 'api-integrations', 'configuration', 'user-access', 'audit-logs'] },
 };
@@ -39,7 +39,8 @@ const ROUTE_LABELS = {
   'traffic-profiles': 'Saved Profiles',
   'test-scheduler': 'Schedule',
   'test-history': 'History',
-  'compare-tests': 'Compare',
+  'compare-tests': 'Compare (before/after)',
+  'trends': 'Internet Trends',
   'reports-exports': 'Reports',
   'unifi-monitoring': 'UniFi',
   'network-topology': 'Topology',
@@ -73,7 +74,20 @@ const HOME_PRESETS = [
     id: 'internet',
     title: 'Internet speed & quality',
     desc: '1 min of real downloads, DNS and latency through your WAN.',
-    payload: { name: 'Internet speed & quality', profile_id: 'internet_wan_mix', traffic_engine: 'internet_wan', test_mode: 'timed', duration_sec: 60, steady_sec: 60, target_gbps: 0.1, simulated_users: 500, simulated_devices: 1000 },
+    // Asks for 1 Gbps; the server caps it at 85% of the management link so SSH/UI stay usable
+    payload: { name: 'Internet speed & quality', profile_id: 'internet_wan_mix', traffic_engine: 'internet_wan', test_mode: 'timed', duration_sec: 60, steady_sec: 60, target_gbps: 1.0, simulated_users: 500, simulated_devices: 1000 },
+  },
+  {
+    id: 'voice',
+    title: 'Voice quality under load',
+    desc: '1 min: phone-call packets while the link is ~95% full. Checks QoS.',
+    payload: { name: 'Voice quality under load', profile_id: 'voice_under_load', traffic_engine: 'trex_stl', test_mode: 'timed', duration_sec: 60, steady_sec: 60, target_gbps: 0.95, simulated_users: 500, simulated_devices: 1000 },
+  },
+  {
+    id: 'breaking',
+    title: 'Find the breaking point',
+    desc: 'Adds users step by step until the gateway struggles.',
+    route: 'stress-soak',
   },
   {
     id: 'bench',
@@ -232,6 +246,11 @@ const App = {
   async api(path, opts = {}) {
     const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
     const res = await fetch(path, { ...opts, headers });
+    if (res.status === 401) {
+      // Session missing/expired (or password changed elsewhere): back to the login screen
+      location.href = '/login';
+      throw new Error('Not logged in');
+    }
     if (!res.ok) {
       let msg = `HTTP ${res.status}`;
       try {
@@ -388,7 +407,11 @@ const App = {
         this.ingestTelemetry(frame);
       } catch (_) {}
     };
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
+      if (ev && ev.code === 4401) {
+        location.href = '/login';
+        return;
+      }
       if (sbWs) sbWs.innerHTML = `<span style="color:#FBBF24;">&#9679;</span> Reconnecting...`;
       setTimeout(() => this.connectWebSocket(), 2000);
     };

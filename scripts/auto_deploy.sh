@@ -15,7 +15,19 @@ log() {
 
 deploy_once() {
     cd "$REPO_DIR" || return 1
-    git fetch origin "$BRANCH" --quiet 2>/dev/null || return 1
+    # Root runs this, but the checkout may belong to another user; newer git refuses that
+    # ("dubious ownership") and every deploy would silently fail. Trust this one directory.
+    git config --global --get-all safe.directory 2>/dev/null | grep -qx "$REPO_DIR" \
+        || git config --global --add safe.directory "$REPO_DIR"
+    if ! FETCH_ERR=$(git fetch origin "$BRANCH" --quiet 2>&1); then
+        # Log each distinct error once instead of every 15 s
+        if [ "$FETCH_ERR" != "${LAST_FETCH_ERR:-}" ]; then
+            log "git fetch failed: $FETCH_ERR"
+            LAST_FETCH_ERR="$FETCH_ERR"
+        fi
+        return 1
+    fi
+    LAST_FETCH_ERR=""
 
     LOCAL_SHA=$(git rev-parse HEAD 2>/dev/null || echo "none")
     REMOTE_SHA=$(git rev-parse "origin/$BRANCH" 2>/dev/null || echo "none")

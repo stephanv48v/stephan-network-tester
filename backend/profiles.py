@@ -368,6 +368,34 @@ PREBUILT_PROFILES: Dict[str, Dict[str, Any]] = {
             {"size": 980, "weight": 35, "proto": "UDP", "sport": 3478, "dport": 3478, "dscp": 34},
         ],
     },
+    "voice_under_load": {
+        "id": "voice_under_load",
+        "name": "Voice Quality Under Load (EF voice + saturating bulk traffic)",
+        "short_name": "Voice Under Load",
+        "category": "Latency & QoS",
+        "traffic_engine": "trex_stl",
+        "description": "Sends DSCP EF (46) G.711-sized voice packets while filling the rest of the link with "
+                       "best-effort 1518B bulk traffic. If QoS works, voice latency, jitter and MOS stay good "
+                       "even though the link is nearly full. MOS is an ITU-T G.107 estimate from measured "
+                       "latency/jitter/loss, not a real phone call.",
+        "avg_frame_size": 1450,
+        "default_rate_pct": 95.0,
+        "target_gbps": 0.95,
+        "default_users": 500,
+        "default_devices": 1000,
+        "tcp_pct": 0,
+        "udp_pct": 100,
+        "dscp": 46,
+        "vlan_id": 0,
+        "protocol_mix": {
+            "voip_sip": 5.0,
+            "bulk_downloads": 95.0,
+        },
+        "streams": [
+            {"size": 214, "weight": 5, "proto": "UDP", "sport": 16384, "dport": 16384, "dscp": 46},
+            {"size": 1518, "weight": 95, "proto": "UDP", "sport": 50000, "dport": 50000, "dscp": 0},
+        ],
+    },
     "udp_burst": {
         "id": "udp_burst",
         "name": "Microburst & Queue Buffer Tolerance",

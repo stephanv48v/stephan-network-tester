@@ -55,6 +55,12 @@ The sidebar has six sections; each one shows its pages as tabs across the top.
 - **My Network**: UniFi, Topology, Ports
 - **System & Settings**: Server Health, TRex Engine, Integrations, Settings, Users, Audit Log
 
+### 5. Built-in Test Workflows
+- **Find the breaking point** (Run a Test → Stress & Soak): back-to-back ASTF steps with more users each time (e.g. 10K → 100K in 10K steps) until packet loss, latency or delivered traffic go outside your limits. Reports the highest user count handled cleanly; every step is saved in History.
+- **Voice quality under load**: DSCP EF voice packets plus best-effort bulk traffic filling ~95% of the link. Shows whether QoS keeps voice latency/jitter/MOS good (MOS is a G.107 estimate).
+- **Before/after comparison**: in History, **Re-run** repeats any test with identical settings (e.g. after a UniFi firmware upgrade); **Before/after** opens the comparison against the previous run of the same test, with a comparison PDF.
+- **Internet Trends + nightly check** (Results & Reports → Internet Trends): one click schedules a 60 s internet speed & quality test every night; the chart shows download, upload, latency and jitter over 7/30/90 days.
+
 User counts are free-entry from 1 to **100,000** (one emulated client IP per user, `16.0.0.1`–`16.1.134.160` at the maximum).
 
 ### 5. Client-Ready Multi-Page Light-Mode Reports (`PDF` / `CSV` / `JSON`)

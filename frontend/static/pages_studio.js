@@ -13,6 +13,7 @@ const STUDIO_ROUTES = new Set([
   'test-history',
   'compare-tests',
   'reports-exports',
+  'trends',
 ]);
 
 const StudioPages = {
@@ -50,6 +51,7 @@ const StudioPages = {
       case 'test-history': return this.renderTestHistory();
       case 'compare-tests': return this.renderCompareTests();
       case 'reports-exports': return this.renderReportsExports();
+      case 'trends': return this.renderTrends();
     }
   },
 
@@ -755,6 +757,33 @@ const StudioPages = {
     `).join('');
 
     el.innerHTML = `
+      <div class="card" style="margin-bottom:16px;border-left:4px solid var(--primary);">
+        <div class="card-header">
+          <div class="card-title">&#128269; Find the breaking point</div>
+          <span class="badge badge-info" id="bpBadge">Idle</span>
+        </div>
+        <p style="font-size:12.5px;color:var(--text-secondary);margin-bottom:10px;">
+          Runs back-to-back tests with more and more users until loss, latency or delivered traffic go outside the limits below.
+          The result is the highest user count your gateway handled cleanly. Each step is saved in History with its own PDF.
+        </p>
+        <div class="grid-4" style="gap:12px;">
+          <div class="form-group"><label class="form-label">Start at (users)</label><input type="number" class="form-control" id="bpStart" min="1" max="100000" value="10000" /></div>
+          <div class="form-group"><label class="form-label">Step size (users)</label><input type="number" class="form-control" id="bpStep" min="1" max="100000" value="10000" /></div>
+          <div class="form-group"><label class="form-label">Stop at (users)</label><input type="number" class="form-control" id="bpMax" min="1" max="100000" value="100000" /></div>
+          <div class="form-group"><label class="form-label">Seconds per step</label><input type="number" class="form-control" id="bpSec" min="15" max="3600" value="60" /></div>
+          <div class="form-group"><label class="form-label">Target throughput (Gbps)</label><input type="number" class="form-control" id="bpGbps" min="0.01" step="0.1" value="1.0" /></div>
+          <div class="form-group"><label class="form-label">Max packet loss (%)</label><input type="number" class="form-control" id="bpLoss" min="0" step="0.1" value="0.5" /></div>
+          <div class="form-group"><label class="form-label">Max avg latency (ms)</label><input type="number" class="form-control" id="bpLat" min="0.01" step="1" value="50" /></div>
+          <div class="form-group"><label class="form-label">&nbsp;</label>
+            <div style="display:flex;gap:6px;">
+              <button class="btn btn-primary" style="flex:1;" id="bpStartBtn" onclick="StudioPages.startBreakingPoint()">&#9654; Start</button>
+              <button class="btn btn-danger" id="bpStopBtn" style="display:none;" onclick="StudioPages.stopBreakingPoint()">&#9632; Stop</button>
+            </div>
+          </div>
+        </div>
+        <div id="bpResult"></div>
+      </div>
+
       <div class="card" style="margin-bottom:16px;">
         <div class="card-header">
           <div class="card-title">&#128101; Custom user-scale test (up to 100,000 users)</div>
@@ -795,6 +824,184 @@ const StudioPages = {
       <h3 style="font-size:14.5px;font-weight:700;margin-bottom:12px;">Pre-Engineered UniFi EFG User-Scale &amp; Extended Soak Scenarios</h3>
       <div class="grid-3">${scenCards}</div>
     `;
+    this.refreshBreakingPoint();
+  },
+
+  // ---- Breaking-point finder ----------------------------------------------
+  async startBreakingPoint() {
+    const num = (id, d) => { const v = parseFloat(document.getElementById(id).value); return Number.isFinite(v) ? v : d; };
+    const body = {
+      start_users: App.clampUsers(num('bpStart', 10000)),
+      step_users: App.clampUsers(num('bpStep', 10000)),
+      max_users: App.clampUsers(num('bpMax', 100000)),
+      step_sec: num('bpSec', 60),
+      target_gbps: num('bpGbps', 1.0),
+      max_loss_pct: num('bpLoss', 0.5),
+      max_latency_ms: num('bpLat', 50),
+    };
+    try {
+      const res = await App.api('/api/capacity/start', { method: 'POST', body: JSON.stringify(body) });
+      App.toast(`Breaking-point finder started: ${res.steps} steps, about ${res.estimated_minutes} min.`, 'success');
+      this.refreshBreakingPoint();
+    } catch (e) {
+      App.toast(`Could not start: ${e.message}`, 'error');
+    }
+  },
+
+  async stopBreakingPoint() {
+    try {
+      await App.api('/api/capacity/stop', { method: 'POST' });
+      App.toast('Stopping the breaking-point finder…', 'info');
+    } catch (e) {
+      App.toast(e.message, 'error');
+    }
+  },
+
+  async refreshBreakingPoint() {
+    clearTimeout(this._bpTimer);
+    const box = document.getElementById('bpResult');
+    if (!box) return;
+    let st;
+    try {
+      st = await App.api('/api/capacity/status');
+    } catch (_) {
+      return;
+    }
+    const badge = document.getElementById('bpBadge');
+    const startBtn = document.getElementById('bpStartBtn');
+    const stopBtn = document.getElementById('bpStopBtn');
+    if (startBtn) startBtn.disabled = !!st.running;
+    if (stopBtn) stopBtn.style.display = st.running ? '' : 'none';
+    const outcomeBadge = {
+      running: ['badge-info', 'Running'], limit_found: ['badge-warning', 'Limit found'], no_limit_found: ['badge-success', 'No limit hit'],
+      cancelled: ['badge-neutral', 'Stopped'], error: ['badge-critical', 'Error'],
+    }[st.running ? 'running' : st.outcome] || ['badge-neutral', 'Idle'];
+    if (badge) { badge.className = `badge ${outcomeBadge[0]}`; badge.textContent = outcomeBadge[1]; }
+
+    const steps = st.steps || [];
+    if (!st.running && !steps.length) {
+      box.innerHTML = '';
+      return;
+    }
+    const lat = (us) => (us ? (us >= 1000 ? `${(us / 1000).toFixed(2)} ms` : `${Number(us).toFixed(1)} μs`) : '—');
+    const rows = steps.map((s) => `
+      <tr>
+        <td>${s.step}</td>
+        <td><strong>${Number(s.users).toLocaleString()}</strong></td>
+        <td>${App.fmtBps(s.avg_rx_bps || 0)}</td>
+        <td>${s.drop_pct != null ? Number(s.drop_pct).toFixed(3) + '%' : '—'}</td>
+        <td>${lat(s.lat_avg_us)}</td>
+        <td>${Number(s.peak_active_flows || 0).toLocaleString()}</td>
+        <td>${s.peak_gw_cpu_pct != null ? s.peak_gw_cpu_pct + '%' : '—'}</td>
+        <td>${s.ok ? '<span class="badge badge-success">OK</span>' : `<span class="badge badge-critical" title="${App.esc(s.reason)}">Broke</span> <span style="font-size:11px;color:var(--text-secondary);">${App.esc(s.reason)}</span>`}</td>
+        <td>${s.run_id ? `<a href="javascript:void(0)" onclick="StudioPages.showRunDetailModal(${Number(s.run_id)})">#${s.run_id}</a>` : ''}</td>
+      </tr>`).join('');
+    const running = st.running
+      ? `<tr><td>${st.current_step}</td><td><strong>${Number(st.current_users || 0).toLocaleString()}</strong></td><td colspan="7" style="color:var(--text-secondary);">Running now… (step ${st.current_step} of ${(st.plan || []).length})</td></tr>`
+      : '';
+    const headline = st.running
+      ? `<div class="alert-banner info" style="margin-top:12px;"><div><strong>Running.</strong> ${App.esc(st.message || '')} — watch it live in <a href="javascript:void(0)" onclick="App.navigate('live-monitoring')">Live View</a>.</div></div>`
+      : `<div class="alert-banner ${st.outcome === 'limit_found' ? 'warning' : st.outcome === 'no_limit_found' ? 'success' : 'info'}" style="margin-top:12px;"><div>
+           ${st.max_good_users ? `<div style="font-size:20px;font-weight:800;">${Number(st.max_good_users).toLocaleString()} users handled cleanly</div>` : ''}
+           ${App.esc(st.message || '')}
+           ${st.ended_at ? `<div style="font-size:11.5px;color:var(--text-secondary);margin-top:3px;">Finished ${new Date(st.ended_at * 1000).toLocaleString()}</div>` : ''}
+         </div></div>`;
+    box.innerHTML = `
+      ${headline}
+      <div class="table-wrap" style="margin-top:10px;">
+        <table class="data-table">
+          <thead><tr><th>Step</th><th>Users</th><th>Avg received</th><th>Loss</th><th>Avg latency</th><th>Peak flows</th><th>Gateway CPU</th><th>Result</th><th>Run</th></tr></thead>
+          <tbody>${rows}${running}</tbody>
+        </table>
+      </div>`;
+    if (st.running && App.currentRoute === 'stress-soak') {
+      this._bpTimer = setTimeout(() => this.refreshBreakingPoint(), 3000);
+    }
+  },
+
+  // =========================================================================
+  // TRENDS (internet quality over time + nightly check)
+  // =========================================================================
+  async renderTrends() {
+    const el = document.getElementById('page-trends');
+    const days = this._trendDays || 30;
+    let data;
+    let schedules = [];
+    try {
+      [data, { schedules }] = await Promise.all([
+        App.api(`/api/trends?engine_type=internet_wan&days=${days}`),
+        App.api('/api/schedules'),
+      ]);
+    } catch (e) {
+      el.innerHTML = `<div class="alert-banner critical">Could not load trends: ${App.esc(e.message)}</div>`;
+      return;
+    }
+    const nightly = (schedules || []).find((j) => j.name === 'Nightly internet check');
+    const pts = data.points || [];
+    const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
+    const dl = pts.map((p) => Number(p.avg_rx_bps || 0));
+    const lats = pts.map((p) => Number(p.lat_avg_us || 0)).filter((v) => v > 0);
+    el.innerHTML = `
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header">
+          <div class="card-title">&#127760; Internet speed &amp; quality over time</div>
+          <div style="display:flex;gap:6px;">
+            ${[7, 30, 90].map((d) => `<button class="btn btn-sm ${d === days ? 'btn-primary' : 'btn-outline'}" onclick="StudioPages._trendDays=${d};StudioPages.renderTrends()">${d} days</button>`).join('')}
+          </div>
+        </div>
+        <div class="grid-4" style="gap:12px;margin-bottom:12px;">
+          <div class="card"><div class="card-subtitle">Tests</div><div class="kpi-value">${pts.length}</div></div>
+          <div class="card"><div class="card-subtitle">Average download</div><div class="kpi-value">${dl.length ? App.fmtBps(avg(dl)) : '—'}</div></div>
+          <div class="card"><div class="card-subtitle">Slowest test</div><div class="kpi-value">${dl.length ? App.fmtBps(Math.min(...dl)) : '—'}</div></div>
+          <div class="card"><div class="card-subtitle">Average latency</div><div class="kpi-value">${lats.length ? (avg(lats) / 1000).toFixed(1) + ' <span class="kpi-unit">ms</span>' : '—'}</div></div>
+        </div>
+        ${pts.length ? '<div id="trendChart" style="width:100%;height:320px;"></div>' : '<div class="alert-banner info"><div>No internet tests in this period yet. Run <strong>Internet speed &amp; quality</strong> from Home, or schedule the nightly check below.</div></div>'}
+      </div>
+      <div class="card">
+        <div class="card-header"><div class="card-title">&#127769; Nightly internet check</div>
+          ${nightly ? '<span class="badge badge-success">Scheduled</span>' : '<span class="badge badge-neutral">Off</span>'}</div>
+        ${nightly
+          ? `<p style="font-size:12.5px;">Runs every night (cron <code>${App.esc(nightly.cron_expr)}</code>) — a 60-second download/upload, DNS and latency test through your WAN.
+             Last run: ${nightly.last_run_at ? new Date(nightly.last_run_at * 1000).toLocaleString() : 'not yet'}.
+             Manage or delete it under <a href="javascript:void(0)" onclick="App.navigate('test-scheduler')">Run a Test → Schedule</a>.</p>`
+          : `<p style="font-size:12.5px;color:var(--text-secondary);margin-bottom:10px;">Runs a 60-second internet speed &amp; quality test every night so you can prove (or disprove) what your ISP promises.</p>
+             <div style="display:flex;gap:8px;align-items:center;">
+               <label class="form-label" style="margin:0;">Time</label>
+               <input type="time" class="form-control" id="nightlyTime" value="02:00" style="max-width:130px;" />
+               <button class="btn btn-primary" onclick="StudioPages.enableNightlyCheck()">Turn on nightly check</button>
+             </div>`}
+      </div>`;
+    if (pts.length && window.echarts) {
+      const ch = echarts.init(document.getElementById('trendChart'));
+      this.trendChart = ch;
+      const labels = pts.map((p) => new Date(p.started_at * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }));
+      ch.setOption({
+        animation: false,
+        tooltip: { trigger: 'axis' },
+        legend: { top: 0, right: 10 },
+        grid: { top: 34, right: 60, bottom: 30, left: 60 },
+        xAxis: { type: 'category', data: labels },
+        yAxis: [{ type: 'value', name: 'Mbps', min: 0 }, { type: 'value', name: 'ms', min: 0 }],
+        series: [
+          { name: 'Download (Mbps)', type: 'line', smooth: true, itemStyle: { color: '#1769D2' }, areaStyle: { color: 'rgba(23,105,210,0.1)' }, data: pts.map((p) => +((p.avg_rx_bps || 0) / 1e6).toFixed(2)) },
+          { name: 'Upload (Mbps)', type: 'line', smooth: true, itemStyle: { color: '#10B981' }, data: pts.map((p) => +((p.avg_tx_bps || 0) / 1e6).toFixed(2)) },
+          { name: 'Latency (ms)', type: 'line', yAxisIndex: 1, smooth: true, itemStyle: { color: '#D97706' }, data: pts.map((p) => +((p.lat_avg_us || 0) / 1000).toFixed(2)) },
+          { name: 'Jitter (ms)', type: 'line', yAxisIndex: 1, smooth: true, itemStyle: { color: '#8B5CF6' }, data: pts.map((p) => +((p.jitter_avg_us || 0) / 1000).toFixed(2)) },
+        ],
+      });
+      ch.on('click', (params) => { const p = pts[params.dataIndex]; if (p) this.showRunDetailModal(p.run_id); });
+    }
+  },
+
+  async enableNightlyCheck() {
+    const [h, m] = (document.getElementById('nightlyTime')?.value || '02:00').split(':').map((x) => parseInt(x, 10));
+    try {
+      await App.api('/api/schedules/nightly-internet', { method: 'POST', body: JSON.stringify({ hour: h || 0, minute: m || 0 }) });
+      App.toast('Nightly internet check is on.', 'success');
+      this.renderTrends();
+    } catch (e) {
+      App.toast(e.message, 'error');
+    }
   },
 
   async runScenario(scenId) {
@@ -932,7 +1139,7 @@ const StudioPages = {
       return `
         <tr>
           <td class="mono">#${r.id}</td>
-          <td><a href="javascript:void(0)" style="color:var(--primary);font-weight:600;text-decoration:none;" onclick="StudioPages.showRunDetailModal(${r.id})">${r.name}</a></td>
+          <td><a href="javascript:void(0)" style="color:var(--primary);font-weight:600;text-decoration:none;" onclick="StudioPages.showRunDetailModal(${r.id})">${App.esc(r.name)}</a></td>
           <td>${dt}</td>
           <td><span class="badge badge-neutral">${r.traffic_engine || 'trex_stl'}</span></td>
           <td>${Number(r.simulated_users || 0).toLocaleString()}</td>
@@ -944,6 +1151,8 @@ const StudioPages = {
             <a class="btn btn-outline btn-sm" href="/api/runs/${r.id}/export/pdf?report_type=technical" target="_blank">PDF</a>
             <a class="btn btn-outline btn-sm" href="/api/runs/${r.id}/export/csv">CSV</a>
             <a class="btn btn-outline btn-sm" href="/api/runs/${r.id}/export/json">JSON</a>
+            ${r.test_mode !== 'rfc2544_sweep' ? `<button class="btn btn-outline btn-sm" title="Run the exact same test again (e.g. after a firmware upgrade)" onclick="StudioPages.rerunTest(${r.id})">&#8635; Re-run</button>` : ''}
+            <button class="btn btn-outline btn-sm" title="Compare with the previous run of the same test" onclick="StudioPages.compareWithPrevious(${r.id})">Before/after</button>
             <button class="btn btn-outline btn-sm" onclick="StudioPages.deleteHistoryRun(${r.id})">&times;</button>
           </td>
         </tr>
@@ -966,6 +1175,42 @@ const StudioPages = {
         </div>
       </div>
     `;
+  },
+
+  async rerunTest(id) {
+    if (App.latest && App.latest.running) {
+      App.toast('A test is already running. Stop it first.', 'error');
+      return;
+    }
+    if (!confirm(`Run test #${id} again with exactly the same settings?`)) return;
+    try {
+      const res = await App.api(`/api/runs/${id}/rerun`, { method: 'POST' });
+      App.toast(`Started test #${res.run_id}: ${res.name}. When it finishes, use "Before/after" to compare.`, 'success');
+      App.closeModal();
+      App.navigate('live-monitoring');
+    } catch (e) {
+      App.toast(`Re-run failed: ${e.message}`, 'error');
+    }
+  },
+
+  async compareWithPrevious(id) {
+    try {
+      const prev = await App.api(`/api/runs/${id}/previous`);
+      App.closeModal();
+      App.navigate('compare-tests');
+      // renderCompareTests is async; wait for the selects to exist, then pick before (A) and after (B)
+      for (let i = 0; i < 30 && !document.getElementById('cmpRunA'); i++) await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 150));
+      const a = document.getElementById('cmpRunA');
+      const b = document.getElementById('cmpRunB');
+      if (a && b) {
+        a.value = String(prev.run_id);
+        b.value = String(id);
+        this.executeCompare();
+      }
+    } catch (e) {
+      App.toast(`${e.message}. Re-run this test first (e.g. after a firmware upgrade), then compare.`, 'error');
+    }
   },
 
   async deleteHistoryRun(id) {
@@ -995,6 +1240,10 @@ const StudioPages = {
           <a class="btn btn-outline btn-sm" href="/api/runs/${r.id}/export/pdf?report_type=executive" target="_blank">Download 3-Page Executive PDF</a>
           <a class="btn btn-outline btn-sm" href="/api/runs/${r.id}/export/csv">Download CSV</a>
           <a class="btn btn-outline btn-sm" href="/api/runs/${r.id}/export/json">Download JSON</a>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:10px;">
+          ${r.test_mode !== 'rfc2544_sweep' ? `<button class="btn btn-outline btn-sm" onclick="StudioPages.rerunTest(${r.id})">&#8635; Re-run this test</button>` : ''}
+          <button class="btn btn-outline btn-sm" onclick="StudioPages.compareWithPrevious(${r.id})">Compare with previous run (before/after)</button>
         </div>
       `;
       App.openModal(`Run #${r.id} — ${r.name}`, html);

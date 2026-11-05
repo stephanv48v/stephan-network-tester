@@ -1,0 +1,231 @@
+"""
+Breaking-point finder: runs a series of stateful (ASTF) tests with more and more
+simulated users until the gateway starts to struggle, then reports the highest
+user count that still met the quality limits.
+
+Each step is a normal test run (it appears in Test History and has its own PDF).
+A step "passes" when, over that step:
+  - packet loss    <= max_loss_pct
+  - avg latency    <= max_latency_ms
+  - received rate  >= min_rx_ratio x sent rate   (traffic actually got through)
+"""
+import threading
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
+import database as db
+
+SETTING_KEY = "capacity_finder_last"
+
+
+class CapacityFinder:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+        self._cancel = threading.Event()
+        self.state: Dict[str, Any] = {"running": False}
+
+    # ------------------------------------------------------------------ public
+    @property
+    def running(self) -> bool:
+        return bool(self.state.get("running"))
+
+    def status(self) -> Dict[str, Any]:
+        with self._lock:
+            if self.state.get("running") or self.state.get("steps"):
+                return dict(self.state)
+        last = db.get_setting(SETTING_KEY, None)
+        return last or {"running": False, "steps": []}
+
+    def start(self, engine: Any, cfg: Dict[str, Any]) -> Dict[str, Any]:
+        from astf_builder import MAX_SIMULATED_USERS
+
+        with self._lock:
+            if self.state.get("running"):
+                return {"status": "error", "error": "The breaking-point finder is already running."}
+
+            def num(key: str, default: float, lo: float, hi: float) -> float:
+                try:
+                    v = float(cfg.get(key, default))
+                except (TypeError, ValueError):
+                    v = default
+                return max(lo, min(hi, v))
+
+            start_users = int(num("start_users", 10000, 1, MAX_SIMULATED_USERS))
+            max_users = int(num("max_users", MAX_SIMULATED_USERS, start_users, MAX_SIMULATED_USERS))
+            step_users = int(num("step_users", 10000, 1, MAX_SIMULATED_USERS))
+            plan: List[int] = list(range(start_users, max_users + 1, step_users))
+            if not plan or plan[-1] != max_users:
+                plan.append(max_users)
+            if len(plan) > 40:
+                return {"status": "error", "error": f"That is {len(plan)} steps — use a bigger step size (max 40 steps)."}
+
+            settings = {
+                "start_users": start_users,
+                "max_users": max_users,
+                "step_users": step_users,
+                "step_sec": int(num("step_sec", 60, 15, 3600)),
+                "target_gbps": num("target_gbps", 1.0, 0.01, 100.0),
+                "max_loss_pct": num("max_loss_pct", 0.5, 0.0, 100.0),
+                "max_latency_ms": num("max_latency_ms", 50.0, 0.01, 10000.0),
+                "min_rx_ratio": num("min_rx_ratio", 0.95, 0.0, 1.0),
+                "profile_id": str(cfg.get("profile_id") or "imix"),
+            }
+            self._cancel.clear()
+            self.state = {
+                "running": True,
+                "started_at": time.time(),
+                "settings": settings,
+                "plan": plan,
+                "current_step": 0,
+                "current_users": None,
+                "current_run_id": None,
+                "steps": [],
+                "max_good_users": None,
+                "first_bad_users": None,
+                "outcome": "running",
+                "message": "Starting…",
+            }
+            self._thread = threading.Thread(target=self._run, args=(engine,), daemon=True, name="capacity-finder")
+            self._thread.start()
+            est_min = round(len(plan) * (settings["step_sec"] + 25) / 60)
+            db.log_audit("Breaking-Point Finder", "Started", f"{start_users:,} → {max_users:,} users",
+                         f"{len(plan)} steps × {settings['step_sec']}s @ {settings['target_gbps']} Gbps")
+            return {"status": "started", "steps": len(plan), "estimated_minutes": est_min}
+
+    def stop(self, engine: Any) -> Dict[str, Any]:
+        if not self.running:
+            return {"status": "idle"}
+        self._cancel.set()
+        try:
+            if engine.running:
+                engine.stop_test("stopped_by_operator")
+        except Exception:
+            pass
+        return {"status": "stopping"}
+
+    # ----------------------------------------------------------------- worker
+    def _set(self, **kw: Any) -> None:
+        with self._lock:
+            self.state.update(kw)
+
+    def _run(self, engine: Any) -> None:
+        s = self.state["settings"]
+        outcome = "completed"
+        try:
+            for idx, users in enumerate(self.state["plan"], start=1):
+                if self._cancel.is_set():
+                    outcome = "cancelled"
+                    break
+                self._set(current_step=idx, current_users=users, message=f"Step {idx}: {users:,} users")
+                ramp = 15 if users <= 20000 else 30
+                res = engine.start_test({
+                    "name": f"[Breaking point] step {idx}: {users:,} users",
+                    "profile_id": s["profile_id"],
+                    "traffic_engine": "trex_astf",
+                    "test_mode": "phased",
+                    "simulated_users": users,
+                    "simulated_devices": users * 2,
+                    "target_gbps": s["target_gbps"],
+                    "ramp_up_sec": ramp,
+                    "steady_sec": s["step_sec"],
+                    "ramp_down_sec": 5,
+                })
+                run_id = res.get("run_id")
+                if not run_id:
+                    self._record(idx, users, None, None, False, res.get("error") or "Test could not start")
+                    outcome = "error"
+                    break
+                self._set(current_run_id=run_id)
+
+                # Wait for this step's run to finish (the engine stops it when its duration ends)
+                deadline = time.time() + ramp + s["step_sec"] + 5 + 120
+                while time.time() < deadline:
+                    if self._cancel.is_set():
+                        break
+                    if not engine.running or engine.active_run_id != run_id:
+                        break
+                    time.sleep(1.0)
+                else:
+                    engine.stop_test("interrupted")
+                if self._cancel.is_set():
+                    outcome = "cancelled"
+                    break
+
+                run = db.get_test_run(int(run_id), False) or {}
+                summary = run.get("summary") or {}
+                ok, reason = self._evaluate(summary, s)
+                self._record(idx, users, run_id, summary, ok, reason)
+                if not ok:
+                    self._set(first_bad_users=users)
+                    break
+                self._set(max_good_users=users)
+                time.sleep(3.0)  # let gateway state tables drain a little between steps
+        except Exception as e:  # never leave the finder stuck in "running"
+            outcome = "error"
+            self._set(message=f"Error: {e}")
+        finally:
+            with self._lock:
+                st = self.state
+                st["running"] = False
+                st["ended_at"] = time.time()
+                st["current_run_id"] = None
+                if outcome == "completed" and st.get("first_bad_users") is None:
+                    st["outcome"] = "no_limit_found"
+                    st["message"] = (f"No breaking point up to {st['plan'][-1]:,} users — "
+                                     f"everything stayed within limits.")
+                elif outcome == "completed":
+                    st["outcome"] = "limit_found"
+                    good = st.get("max_good_users")
+                    st["message"] = (f"Gateway handled {good:,} users; quality broke at {st['first_bad_users']:,}."
+                                     if good else f"Quality was already outside limits at {st['first_bad_users']:,} users.")
+                else:
+                    st["outcome"] = outcome
+                    if outcome == "cancelled":
+                        st["message"] = "Stopped by operator."
+                    elif not str(st.get("message", "")).startswith("Error"):
+                        last = (st.get("steps") or [{}])[-1]
+                        st["message"] = f"Stopped: {last.get('reason') or 'test error'}"
+                final = dict(st)
+            db.set_setting(SETTING_KEY, final)
+            db.log_audit("Breaking-Point Finder", "Finished", final.get("outcome", ""), final.get("message", ""))
+
+    @staticmethod
+    def _evaluate(summary: Dict[str, Any], s: Dict[str, Any]) -> Tuple[bool, str]:
+        if not summary or not summary.get("sample_count"):
+            return False, "No measurements were recorded for this step"
+        loss = float(summary.get("drop_pct") or 0.0)
+        lat_ms = float(summary.get("lat_avg_us") or 0.0) / 1000.0
+        tx = float(summary.get("avg_tx_bps") or 0.0)
+        rx = float(summary.get("avg_rx_bps") or 0.0)
+        problems = []
+        if loss > s["max_loss_pct"]:
+            problems.append(f"loss {loss:.3f}% > {s['max_loss_pct']}%")
+        if lat_ms > s["max_latency_ms"]:
+            problems.append(f"latency {lat_ms:.2f} ms > {s['max_latency_ms']} ms")
+        if tx > 0 and rx / tx < s["min_rx_ratio"]:
+            problems.append(f"only {rx / tx * 100:.1f}% of traffic got through")
+        if tx <= 0:
+            problems.append("no traffic was sent")
+        return (not problems), ("; ".join(problems) if problems else "within limits")
+
+    def _record(self, idx: int, users: int, run_id: Any, summary: Optional[Dict[str, Any]], ok: bool, reason: str) -> None:
+        summary = summary or {}
+        with self._lock:
+            self.state["steps"].append({
+                "step": idx,
+                "users": users,
+                "run_id": run_id,
+                "ok": ok,
+                "reason": reason,
+                "avg_tx_bps": summary.get("avg_tx_bps"),
+                "avg_rx_bps": summary.get("avg_rx_bps"),
+                "drop_pct": summary.get("drop_pct"),
+                "lat_avg_us": summary.get("lat_avg_us"),
+                "p99_lat_us": summary.get("p99_lat_us"),
+                "peak_active_flows": summary.get("peak_active_flows"),
+                "peak_gw_cpu_pct": summary.get("peak_gw_cpu_pct"),
+            })
+
+
+capacity_finder = CapacityFinder()

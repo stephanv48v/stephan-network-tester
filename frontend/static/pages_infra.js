@@ -697,8 +697,17 @@ const InfraPages = {
     `).join('');
 
     el.innerHTML = `
+      <div class="card" style="margin-bottom:14px;max-width:520px;">
+        <div class="card-header"><div class="card-title">Change admin password</div></div>
+        <div class="form-group"><label class="form-label">Current password</label><input type="password" class="form-control" id="uaPwCur" autocomplete="current-password" /></div>
+        <div class="form-group"><label class="form-label">New password (min 8 characters)</label><input type="password" class="form-control" id="uaPwNew" autocomplete="new-password" /></div>
+        <div class="form-group"><label class="form-label">Confirm new password</label><input type="password" class="form-control" id="uaPwConf" autocomplete="new-password" /></div>
+        <div id="uaPwMsg" style="font-size:12.5px;margin-bottom:10px;display:none;"></div>
+        <button class="btn btn-primary" id="uaPwBtn" onclick="InfraPages.changeAdminPassword()">Change password</button>
+        <div style="font-size:11.5px;color:var(--text-secondary);margin-top:8px;">Changing the password signs out every other browser.</div>
+      </div>
       <div class="alert-banner">
-        <div><strong>Direct LAN Appliance Mode:</strong> Per appliance specification, HTTP Port 80 opens directly without a login wall on the lab LAN; operator profiles below govern test attribution and audit logging.</div>
+        <div><strong>Single admin login:</strong> the web UI is protected by one admin password. Operator profiles below govern test attribution and audit logging only.</div>
       </div>
       <div class="grid-2">
         <div class="card">
@@ -714,6 +723,36 @@ const InfraPages = {
         </div>
       </div>
     `;
+  },
+
+  async changeAdminPassword() {
+    const cur = document.getElementById('uaPwCur').value;
+    const nw = document.getElementById('uaPwNew').value;
+    const conf = document.getElementById('uaPwConf').value;
+    const msg = document.getElementById('uaPwMsg');
+    const btn = document.getElementById('uaPwBtn');
+    const show = (text, ok) => {
+      msg.style.display = 'block';
+      msg.style.color = ok ? 'var(--success)' : 'var(--critical)';
+      msg.textContent = text;
+    };
+    if (!cur) return show('Enter your current password.', false);
+    if (nw.length < 8) return show('New password must be at least 8 characters.', false);
+    if (nw !== conf) return show('New passwords do not match.', false);
+    btn.disabled = true;
+    try {
+      await App.api('/api/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ current_password: cur, new_password: nw }),
+      });
+      ['uaPwCur', 'uaPwNew', 'uaPwConf'].forEach((id) => { document.getElementById(id).value = ''; });
+      show('Password changed. Other sessions have been signed out.', true);
+      App.toast('Admin password changed', 'success');
+    } catch (e) {
+      show(e.message || 'Could not change password.', false);
+    } finally {
+      btn.disabled = false;
+    }
   },
 
   async addUser() {

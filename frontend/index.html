@@ -59,6 +59,7 @@
       <div class="sidebar-footer">
         <div style="font-weight:600;color:#E2E8F0;" id="sbHostIp">Host: —</div>
         <div id="sbWsStatus" style="margin-top:2px;">Telemetry: connecting…</div>
+        <a href="/login" id="sbSignOut" style="display:inline-block;margin-top:8px;color:#94A3B8;text-decoration:underline;cursor:pointer;" onclick="event.preventDefault();fetch('/api/auth/logout',{method:'POST'}).finally(()=>{location.href='/login';});">Sign out</a>
       </div>
     </aside>
 
@@ -258,6 +259,7 @@
 
         <section class="page-section" id="page-test-history"></section>
         <section class="page-section" id="page-compare-tests"></section>
+        <section class="page-section" id="page-trends"></section>
         <section class="page-section" id="page-reports-exports"></section>
 
         <section class="page-section" id="page-unifi-monitoring"></section>
